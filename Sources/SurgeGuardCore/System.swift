@@ -6,6 +6,8 @@ import SystemConfiguration
 public struct CommandResult {
     public let status: Int32
     public let output: String
+    public let diagnostics: String
+    public var combined: String { output + diagnostics }
 }
 
 public enum Command {
@@ -14,27 +16,31 @@ public enum Command {
     public static func run(_ executable: String, _ arguments: [String],
                            input: String? = nil, timeout: TimeInterval = 2) throws -> CommandResult {
         guard (input?.utf8.count ?? 0) < 16_384 else { throw GuardError("Command input is too large") }
-        let task = Process(), outputPipe = Pipe(), inputPipe = Pipe()
-        let finished = DispatchSemaphore(value: 0), drained = DispatchSemaphore(value: 0)
+        let task = Process(), outputPipe = Pipe(), errorPipe = Pipe(), inputPipe = Pipe()
+        let finished = DispatchSemaphore(value: 0), drained = DispatchGroup()
         final class Capture: @unchecked Sendable { var bytes = Data(); var overflow = false }
-        let capture = Capture()
+        let capture = Capture(), errors = Capture()
         task.executableURL = URL(fileURLWithPath: executable)
         task.arguments = arguments
         task.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "LANG": "C"]
         task.standardOutput = outputPipe
-        task.standardError = outputPipe
+        task.standardError = errorPipe
         task.standardInput = input == nil ? FileHandle.nullDevice : inputPipe.fileHandleForReading
         task.terminationHandler = { _ in finished.signal() }
         try task.run()
         outputPipe.fileHandleForWriting.closeFile()
-        DispatchQueue.global().async {
-            while true {
-                let data = outputPipe.fileHandleForReading.availableData
-                if data.isEmpty { break }
-                if capture.bytes.count + data.count <= 1_048_576 { capture.bytes.append(data) }
-                else { capture.overflow = true }
+        errorPipe.fileHandleForWriting.closeFile()
+        for (pipe, destination) in [(outputPipe, capture), (errorPipe, errors)] {
+            drained.enter()
+            DispatchQueue.global().async {
+                defer { drained.leave() }
+                while true {
+                    let data = pipe.fileHandleForReading.availableData
+                    if data.isEmpty { break }
+                    if destination.bytes.count + data.count <= 1_048_576 { destination.bytes.append(data) }
+                    else { destination.overflow = true }
+                }
             }
-            drained.signal()
         }
         if let input {
             do {
@@ -50,18 +56,19 @@ public enum Command {
             _ = finished.wait(timeout: .now() + 1)
             throw GuardError("\(executable) timed out")
         }
-        guard drained.wait(timeout: .now() + 1) == .success, !capture.overflow else {
+        guard drained.wait(timeout: .now() + 1) == .success, !capture.overflow, !errors.overflow else {
             throw GuardError("\(executable) output exceeded limits")
         }
         return CommandResult(status: task.terminationStatus,
-                             output: String(decoding: capture.bytes, as: UTF8.self))
+                             output: String(decoding: capture.bytes, as: UTF8.self),
+                             diagnostics: String(decoding: errors.bytes, as: UTF8.self))
     }
 
     @discardableResult
     public static func checked(_ executable: String, _ arguments: [String],
                                input: String? = nil, timeout: TimeInterval = 2) throws -> String {
         let result = try run(executable, arguments, input: input, timeout: timeout)
-        guard result.status == 0 else { throw GuardError("\(executable) failed: \(result.output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+        guard result.status == 0 else { throw GuardError("\(executable) failed: \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))") }
         return result.output
     }
 }

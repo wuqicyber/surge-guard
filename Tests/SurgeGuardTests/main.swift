@@ -52,6 +52,9 @@ do {
     print("PASS: malformed/edited PF configuration is rejected")
 
     try check(Policy.attachedFirst(Policy.attachment + " all\nanchor \"com.apple/*\" all\n"), "Valid attachment rejected")
+    let liveMacRules = "scrub-anchor \"com.apple/*\" all fragment reassemble\n" + Policy.attachment + " all\nanchor \"com.apple/*\" all\n"
+    try check(Policy.attachedFirst(liveMacRules), "macOS normalization rule mistaken for a filter")
+    try check(!Policy.attachedFirst("scrub-anchor \"com.apple/*\" all\npass quick all\n" + Policy.attachment + " all\n"), "Filter before guard accepted after normalization")
     for invalid in ["pass quick all\n" + Policy.attachment + " all\n",
                     "anchor \"com.apple/*\" all\n" + Policy.attachment + " all\n",
                     "anchor \"io.github.surge-guard-impostor\" all\n", ""] {
@@ -67,7 +70,7 @@ do {
 
     // -n is parse-only; never enable PF or touch live rules/state in tests.
     let parser = try Command.run("/sbin/pfctl", ["-n", "-a", Policy.anchor, "-f", "-"], input: Policy.blocked)
-    try check(parser.status == 0, "PF parser rejected policy: \(parser.output)")
+    try check(parser.status == 0, "PF parser rejected policy: \(parser.combined)")
     print("PASS: native macOS PF parser")
 
     var started = Date()
@@ -81,6 +84,9 @@ do {
     try rejects { _ = try Command.checked("/usr/bin/false", []) }
     let literal = try Command.run("/usr/bin/printf", ["%s", "literal $(not-a-command)"])
     try check(literal.output == "literal $(not-a-command)", "Unexpected shell evaluation")
+    // Constant test command only: exercise real stderr/stdout separation.
+    let streams = try Command.run("/bin/sh", ["-c", "printf 'rules'; printf 'ALTQ warning' >&2"])
+    try check(streams.output == "rules" && streams.diagnostics == "ALTQ warning", "Diagnostics contaminated structured output")
     print("PASS: command errors and literal arguments")
     // Read-only regression for the group-writable /var/run found on macOS.
     try check(!Paths.runtime.hasPrefix("/var/run/"), "Runtime state must not depend on a non-writable /var/run")

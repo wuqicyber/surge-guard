@@ -106,8 +106,10 @@ public final class Firewall {
                 references.split(whereSeparator: { !$0.isNumber }).contains(Substring(token))
         }
         if !ownsReference {
-            let result = try Command.checked("/sbin/pfctl", ["-E"])
-            guard let line = result.split(separator: "\n").first(where: { $0.contains("Token") }),
+            let result = try Command.run("/sbin/pfctl", ["-E"])
+            guard result.status == 0 else { throw GuardError("Cannot acquire PF reference: \(result.combined)") }
+            // pfctl writes the enable-reference token to stderr on macOS.
+            guard let line = result.combined.split(separator: "\n").first(where: { $0.contains("Token") }),
                   let token = line.split(whereSeparator: { !$0.isNumber }).last else {
                 throw GuardError("PF did not return an enable-reference token")
             }

@@ -97,9 +97,13 @@ public enum Policy {
     }
 
     public static func attachedFirst(_ rules: String) -> Bool {
-        // pfctl normalizes its output with an `all` suffix.
-        guard let first = rules.split(separator: "\n").first(where: { !$0.hasPrefix("#") }) else { return false }
-        return first == Substring(attachment) || first == Substring(attachment + " all")
+        // macOS -sr also lists normalization rules. They are not packet-filter
+        // allow/block rules and may correctly precede our filter anchor.
+        let lines = rules.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let first = lines.first(where: {
+            !$0.isEmpty && !$0.hasPrefix("#") && !$0.hasPrefix("scrub-anchor ") && !$0.hasPrefix("scrub ")
+        }) else { return false }
+        return first == attachment || first == attachment + " all"
     }
 
     public static func defaultInterface(_ output: String) -> String? {
