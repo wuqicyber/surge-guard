@@ -1,0 +1,21 @@
+README.md
+  s_dd361819fe96ee::t_01fd9f6a10d59d 103-104
+README.zh-CN.md
+  s_dd361819fe96ee::t_d4d2b5b2422526 81-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "13d9b915a99ec2c4b293e1b3d2e232066f30b867",
+  "prompts": {},
+  "sessions": {
+    "s_dd361819fe96ee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da902e30-8e4f-4a27-be25-0f40d62beaa3",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
