@@ -60,16 +60,9 @@ enum Admin {
         try RootFiles.verify(Paths.binary)
         try RootFiles.verify(Paths.plist)
         try RootFiles.verify(Policy.anchorPath)
-        try RootFiles.verify(Paths.pfConfig)
-        let config = try String(contentsOfFile: Paths.pfConfig)
-        guard config.contains(Policy.configBlock) else { throw GuardError("Missing managed PF attachment; install first") }
-        // This one-time main-ruleset reload can affect dynamic main rules.
-        // Ordinary daemon updates touch only our anchor. Never use -Fa.
-        if try !Firewall().attached() {
-            try Command.checked("/sbin/pfctl", ["-n", "-f", Paths.pfConfig])
-            try Command.checked("/sbin/pfctl", ["-f", Paths.pfConfig])
-        }
-        guard try Firewall().attached() else { throw GuardError("A filter rule precedes Surge Guard; custom PF setup needs manual integration") }
+        try Firewall().prepareAttachment()
+        // Clear a persisted launchd disable override so subsequent boots load it.
+        try Command.checked("/bin/launchctl", ["enable", "system/" + Paths.label])
         try Command.checked("/bin/launchctl", ["bootstrap", "system", Paths.plist], timeout: 10)
         print("Service loaded. Verify with sudo \(Paths.binary) status")
     }

@@ -5,7 +5,7 @@ public enum Paths {
     public static let label = "io.github.surge-guard"
     public static let binary = "/Library/PrivilegedHelperTools/surge-guard"
     public static let plist = "/Library/LaunchDaemons/\(label).plist"
-    public static let runtime = "/var/run/surge-guard"
+    public static let runtime = "/private/var/db/surge-guard"
     public static let pfConfig = "/private/etc/pf.conf"
 }
 
@@ -33,8 +33,9 @@ public enum RootFiles {
     }
 
     public static func prepareRuntime() throws {
-        // /var/run is an Apple-owned symlink on macOS; verify its real directory.
-        try verify("/private/var/run", directory: true)
+        // macOS /var/run can be group-writable by daemon. Use a root-only
+        // parent; persisted PF tokens are checked against live references.
+        try verify(URL(fileURLWithPath: Paths.runtime).deletingLastPathComponent().path, directory: true)
         if !FileManager.default.fileExists(atPath: Paths.runtime) {
             try FileManager.default.createDirectory(atPath: Paths.runtime, withIntermediateDirectories: false,
                                                     attributes: [.posixPermissions: 0o700])
@@ -66,6 +67,24 @@ public final class Firewall {
 
     public func attached() throws -> Bool {
         Policy.attachedFirst(try Command.checked("/sbin/pfctl", ["-sr"]))
+    }
+
+    public func prepareAttachment() throws {
+        let live = try Command.checked("/sbin/pfctl", ["-sr"])
+        if Policy.attachedFirst(live) { return }
+        guard !live.contains(Policy.attachment) else {
+            throw GuardError("Another filter precedes Surge Guard; review PF ordering")
+        }
+        try RootFiles.verify(Paths.pfConfig)
+        try RootFiles.verify(Policy.anchorPath)
+        let config = try String(contentsOfFile: Paths.pfConfig)
+        guard config.contains(Policy.configBlock) else {
+            throw GuardError("Missing managed PF attachment; install first")
+        }
+        // The daemon must not depend on com.apple.pfctl running first at boot.
+        try Command.checked("/sbin/pfctl", ["-n", "-f", Paths.pfConfig])
+        try Command.checked("/sbin/pfctl", ["-f", Paths.pfConfig])
+        try requireAttachment()
     }
 
     private func requireAttachment() throws {

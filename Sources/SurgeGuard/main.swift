@@ -20,6 +20,7 @@ final class Daemon {
     init() throws {
         lock = try RuntimeLock()
         try RootFiles.verify(Policy.anchorPath)
+        try firewall.prepareAttachment()
         try firewall.block()
     }
 

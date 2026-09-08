@@ -100,6 +100,8 @@ Logs are available in Console or:
 log show --last 10m --predicate 'process == "surge-guard"'
 ```
 
+Boot initialization verifies and, if absent, attaches the managed PF anchor itself; it does not require Apple's PF loader to have run first. It then blocks before evaluating Surge. This makes initialization independent of daemon ordering, **not a guarantee of being the first process or preceding every boot-time packet**. Locks and PF reference tokens live in the root-owned `/private/var/db/surge-guard`; stale tokens are validated against the live PF reference list after reboot.
+
 ## Limitations
 
 - The nominal timer interval is **not an upper bound** on block latency; scheduling, probes and PF operations add time. Apps may send packets between Surge stopping and the rule being applied.

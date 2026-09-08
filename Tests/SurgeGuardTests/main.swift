@@ -82,6 +82,10 @@ do {
     let literal = try Command.run("/usr/bin/printf", ["%s", "literal $(not-a-command)"])
     try check(literal.output == "literal $(not-a-command)", "Unexpected shell evaluation")
     print("PASS: command errors and literal arguments")
+    // Read-only regression for the group-writable /var/run found on macOS.
+    try check(!Paths.runtime.hasPrefix("/var/run/"), "Runtime state must not depend on a non-writable /var/run")
+    try RootFiles.verify(URL(fileURLWithPath: Paths.runtime).deletingLastPathComponent().path, directory: true)
+    print("PASS: protected runtime parent")
     print("All checks passed. Live packet blocking has NOT been tested by this program.")
 } catch {
     fputs("FAIL: \(error)\n", stderr)
