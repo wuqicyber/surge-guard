@@ -1,0 +1,19 @@
+docs/verification.md
+  s_e8a9d7d925a85d::t_f99870de90366c 1,7,13,15-22,24-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "928645c1b4e62033ab964a6c7671f509ce970b66",
+  "prompts": {},
+  "sessions": {
+    "s_e8a9d7d925a85d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ca1-c78c-7a11-ae08-ccd4452b0042",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
