@@ -1,0 +1,31 @@
+.gitignore
+  s_dd361819fe96ee::t_e5597bf0593f13 1-6
+LICENSE
+  s_e8a9d7d925a85d::t_513762a61852e2 1-21
+docs/acceptance.md
+  s_e8a9d7d925a85d::t_89ef7808368979 1-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "157c752d9f9288d7763c3f9332e1fa81bddbeac8",
+  "prompts": {},
+  "sessions": {
+    "s_dd361819fe96ee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da902e30-8e4f-4a27-be25-0f40d62beaa3",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_e8a9d7d925a85d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ca1-c78c-7a11-ae08-ccd4452b0042",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
