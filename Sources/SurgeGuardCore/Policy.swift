@@ -6,18 +6,20 @@ public struct Readiness: Codable, Equatable {
     public var connected: Bool
     public var vifUp: Bool
     public var ownsDefaultRoute: Bool
+    public var ipv6Safe: Bool
 
     public init(trustedProcess: Bool, surgeService: Bool, connected: Bool,
-                vifUp: Bool, ownsDefaultRoute: Bool) {
+                vifUp: Bool, ownsDefaultRoute: Bool, ipv6Safe: Bool) {
         self.trustedProcess = trustedProcess
         self.surgeService = surgeService
         self.connected = connected
         self.vifUp = vifUp
         self.ownsDefaultRoute = ownsDefaultRoute
+        self.ipv6Safe = ipv6Safe
     }
 
     public var ready: Bool {
-        trustedProcess && surgeService && connected && vifUp && ownsDefaultRoute
+        trustedProcess && surgeService && connected && vifUp && ownsDefaultRoute && ipv6Safe
     }
 
     public var reasons: [String] {
@@ -25,7 +27,8 @@ public struct Readiness: Codable, Equatable {
          (surgeService, "primary network service is not Surge"),
          (connected, "Surge network extension is not connected"),
          (vifUp, "Surge VIF is not up with its expected IPv4 address"),
-         (ownsDefaultRoute, "Surge does not own the IPv4 default route")]
+         (ownsDefaultRoute, "Surge does not own the IPv4 default route"),
+         (ipv6Safe, "the global IPv6 route is not owned by Surge")]
             .filter { !$0.0 }.map { $0.1 }
     }
 }
@@ -111,6 +114,10 @@ public enum Policy {
             let fields = line.split(whereSeparator: { $0.isWhitespace })
             return fields.count == 2 && fields[0] == "interface:" ? String(fields[1]) : nil
         }.first
+    }
+
+    public static func ipv6Safe(primaryInterface: String?, surgeInterface: String) -> Bool {
+        primaryInterface == nil || (!surgeInterface.isEmpty && primaryInterface == surgeInterface)
     }
 }
 

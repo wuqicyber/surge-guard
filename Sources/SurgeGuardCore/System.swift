@@ -16,6 +16,7 @@ public enum Command {
     public static func run(_ executable: String, _ arguments: [String],
                            input: String? = nil, timeout: TimeInterval = 2) throws -> CommandResult {
         guard (input?.utf8.count ?? 0) < 16_384 else { throw GuardError("Command input is too large") }
+        let invocation = ([executable] + arguments).joined(separator: " ")
         let task = Process(), outputPipe = Pipe(), errorPipe = Pipe(), inputPipe = Pipe()
         let finished = DispatchSemaphore(value: 0), drained = DispatchGroup()
         final class Capture: @unchecked Sendable { var bytes = Data(); var overflow = false }
@@ -53,11 +54,13 @@ public enum Command {
         }
         if finished.wait(timeout: .now() + timeout) != .success {
             kill(task.processIdentifier, SIGKILL)
-            _ = finished.wait(timeout: .now() + 1)
-            throw GuardError("\(executable) timed out")
+            guard finished.wait(timeout: .now() + 1) == .success else {
+                throw GuardError("\(invocation) timed out after \(timeout)s and did not terminate")
+            }
+            throw GuardError("\(invocation) timed out after \(timeout)s")
         }
         guard drained.wait(timeout: .now() + 1) == .success, !capture.overflow, !errors.overflow else {
-            throw GuardError("\(executable) output exceeded limits")
+            throw GuardError("\(invocation) output exceeded limits")
         }
         return CommandResult(status: task.terminationStatus,
                              output: String(decoding: capture.bytes, as: UTF8.self),
@@ -68,7 +71,8 @@ public enum Command {
     public static func checked(_ executable: String, _ arguments: [String],
                                input: String? = nil, timeout: TimeInterval = 2) throws -> String {
         let result = try run(executable, arguments, input: input, timeout: timeout)
-        guard result.status == 0 else { throw GuardError("\(executable) failed: \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))") }
+        let invocation = ([executable] + arguments).joined(separator: " ")
+        guard result.status == 0 else { throw GuardError("\(invocation) failed: \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))") }
         return result.output
     }
 }
@@ -103,26 +107,30 @@ public enum Probe {
         return result
     }
 
-    public static func trustedSurgeRunning() throws -> Bool {
+    public static func trustedSurgePID() throws -> pid_t? {
         let result = try Command.run("/usr/bin/pgrep", ["-x", "Surge"])
-        guard result.status == 0 else { return false }
+        guard result.status == 0 else { return nil }
         var requirement: SecRequirement?
         let identity = "anchor apple generic and identifier \"com.nssurge.surge-mac\" and certificate leaf[subject.OU] = \"YCKFLA6N72\""
         guard SecRequirementCreateWithString(identity as CFString, SecCSFlags(rawValue: 0), &requirement) == errSecSuccess,
-              let requirement else { return false }
+              let requirement else { return nil }
         for value in result.output.split(whereSeparator: { $0.isWhitespace }) {
             guard let pid = Int32(value) else { continue }
             var code: SecCode?
             let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
             if SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(rawValue: 0), &code) == errSecSuccess,
                let code, SecCodeCheckValidity(code, SecCSFlags(rawValue: 0), requirement) == errSecSuccess {
-                return true
+                return pid
             }
         }
-        return false
+        return nil
     }
 
-    public static func readiness() throws -> Readiness {
+    public static func trustedSurgeRunning() throws -> Bool {
+        try trustedSurgePID() != nil
+    }
+
+    public static func readiness(trustedProcess: Bool? = nil) throws -> Readiness {
         guard let store = SCDynamicStoreCreate(nil, "surge-guard.probe" as CFString, nil, nil) else {
             throw GuardError("Cannot open SystemConfiguration store")
         }
@@ -130,8 +138,11 @@ public enum Probe {
             SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any] ?? [:]
         }
         let primary = dictionary("State:/Network/Global/IPv4")
+        let globalIPv6 = dictionary("State:/Network/Global/IPv6")
         let service = primary["PrimaryService"] as? String ?? ""
         let interface = primary["PrimaryInterface"] as? String ?? ""
+        let ipv6Interface = globalIPv6.isEmpty ? nil :
+            (globalIPv6["PrimaryInterface"] as? String ?? "")
         let vpn = dictionary("Setup:/Network/Service/\(service)/VPN")
         let surgeService = vpn["NEProviderBundleIdentifier"] as? String == "com.nssurge.surge-mac.ne"
         let connection = surgeService ? SCNetworkConnectionCreateWithServiceID(nil, service as CFString, nil, nil) : nil
@@ -140,8 +151,9 @@ public enum Probe {
             $0.name == interface && $0.up && $0.address == "198.18.0.1"
         }
         let route = try Command.checked("/sbin/route", ["-n", "get", "default"])
-        return Readiness(trustedProcess: try trustedSurgeRunning(), surgeService: surgeService,
+        return Readiness(trustedProcess: try trustedProcess ?? trustedSurgeRunning(), surgeService: surgeService,
                          connected: connected, vifUp: vifUp,
-                         ownsDefaultRoute: !interface.isEmpty && Policy.defaultInterface(route) == interface)
+                         ownsDefaultRoute: !interface.isEmpty && Policy.defaultInterface(route) == interface,
+                         ipv6Safe: Policy.ipv6Safe(primaryInterface: ipv6Interface, surgeInterface: interface))
     }
 }

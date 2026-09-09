@@ -6,6 +6,7 @@ public enum Paths {
     public static let binary = "/Library/PrivilegedHelperTools/surge-guard"
     public static let plist = "/Library/LaunchDaemons/\(label).plist"
     public static let runtime = "/private/var/db/surge-guard"
+    public static let eventsLog = runtime + "/events.log"
     public static let pfConfig = "/private/etc/pf.conf"
 }
 
@@ -83,7 +84,7 @@ public final class Firewall {
         }
         // The daemon must not depend on com.apple.pfctl running first at boot.
         try Command.checked("/sbin/pfctl", ["-n", "-f", Paths.pfConfig])
-        try Command.checked("/sbin/pfctl", ["-f", Paths.pfConfig])
+        try Command.checked("/sbin/pfctl", ["-f", Paths.pfConfig], timeout: 5)
         try requireAttachment()
     }
 
@@ -106,7 +107,7 @@ public final class Firewall {
                 references.split(whereSeparator: { !$0.isNumber }).contains(Substring(token))
         }
         if !ownsReference {
-            let result = try Command.run("/sbin/pfctl", ["-E"])
+            let result = try Command.run("/sbin/pfctl", ["-E"], timeout: 5)
             guard result.status == 0 else { throw GuardError("Cannot acquire PF reference: \(result.combined)") }
             // pfctl writes the enable-reference token to stderr on macOS.
             guard let line = result.combined.split(separator: "\n").first(where: { $0.contains("Token") }),
@@ -115,8 +116,10 @@ public final class Firewall {
             }
             try RootFiles.write(String(token) + "\n", to: tokenPath)
         }
-        if try !enabled() { try Command.checked("/sbin/pfctl", ["-e"]) }
-        guard try enabled() else { throw GuardError("PF is not enabled") }
+        if try !enabled() {
+            try Command.checked("/sbin/pfctl", ["-e"], timeout: 5)
+            guard try enabled() else { throw GuardError("PF is not enabled") }
+        }
     }
 
     public func rememberAddresses() {
@@ -133,26 +136,27 @@ public final class Firewall {
     }
 
     public func block() throws {
-        try requireAttachment()
         rememberAddresses()
-        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"], input: Policy.blocked)
+        // Load fail-closed rules before slower integrity checks. If the anchor
+        // was detached, ensureEnabled still rejects the transition.
+        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"],
+                            input: Policy.blocked, timeout: 5)
         try ensureEnabled()
         let actual = try readRules()
         guard actual.contains("surge-guard-block") else { throw GuardError("Block rule did not load") }
         // States precede PF rule evaluation. Terminate states involving this
         // Mac, including old interface addresses; never flush all PF state.
         for address in knownAddresses.sorted() {
-            try Command.checked("/sbin/pfctl", ["-k", address])
-            try Command.checked("/sbin/pfctl", ["-k", address.contains(":") ? "::/0" : "0.0.0.0/0", "-k", address])
+            try Command.checked("/sbin/pfctl", ["-k", address], timeout: 5)
+            try Command.checked("/sbin/pfctl", ["-k", address.contains(":") ? "::/0" : "0.0.0.0/0", "-k", address], timeout: 5)
         }
         knownAddresses = Set(Probe.addresses().filter { !$0.loopback }.map(\.address))
         expectedRules = actual
     }
 
     public func allow() throws {
-        try requireAttachment()
         try ensureEnabled()
-        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"])
+        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"], timeout: 5)
         let actual = try readRules()
         guard actual.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw GuardError("Surge Guard rules were not cleared")
@@ -162,14 +166,14 @@ public final class Firewall {
 
     public func unlock() throws {
         // Only the caller's anchor/reference is removed, including during recovery.
-        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"])
+        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"], timeout: 5)
         if FileManager.default.fileExists(atPath: tokenPath) {
             try RootFiles.verify(tokenPath)
             let token = try String(contentsOfFile: tokenPath).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty, token.allSatisfy(\.isNumber) else { throw GuardError("Invalid PF reference file") }
             let references = try Command.checked("/sbin/pfctl", ["-s", "References"])
             if references.split(whereSeparator: { !$0.isNumber }).contains(Substring(token)) {
-                try Command.checked("/sbin/pfctl", ["-X", token])
+                try Command.checked("/sbin/pfctl", ["-X", token], timeout: 5)
             }
             try FileManager.default.removeItem(atPath: tokenPath)
         }

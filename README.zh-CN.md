@@ -8,15 +8,16 @@ macOS 上的 Surge 自动断网工具：**Surge 正在运行且增强模式实�
 
 ## 工作方式
 
-系统服务独立于 Surge 常驻，由 macOS `launchd` 管理；只有以下五项全部满足才放行：
+系统服务独立于 Surge 常驻，由 macOS `launchd` 管理；只有以下六项全部满足才放行：
 
 1. 存在代码签名属于 Surge 官方的主进程。
 2. 当前主网络服务属于 Surge 的 Network Extension。
 3. 该扩展状态为已连接。
 4. 对应 `utun` 网卡处于启用状态，并具有 Surge 的 `198.18.0.1` 地址。
 5. 当前 IPv4 默认路由指向该网卡。
+6. 没有全局 IPv6 主接口，或该接口同样属于 Surge。
 
-不固定 `utun9` 等接口编号，也不按 VPN 显示名称识别，因此其他 VPN 在线不等于 Surge 就绪。网络变化触发检查，另有每 0.5 秒的定时复核；实际响应还包含系统调度和防火墙执行时间。
+不固定 `utun9` 等接口编号，也不按 VPN 显示名称识别，因此其他 VPN 在线不等于 Surge 就绪。网络变化触发立即检查，已验证的 Surge PID 会被缓存并监听退出；每 0.5 秒复核就绪状态，每 5 秒完整审计 PF。实际响应还包含系统调度和防火墙执行时间。
 
 阻断时同时处理 IPv4/IPv6、普通入站/出站流量，并清除涉及本机地址的既有 PF 连接状态。保留 `localhost`、DHCP 和必要的 IPv6 本地链路配置，不关闭 Wi-Fi 或网卡。互联网、普通局域网访问及其他 VPN 不能作为有意放行的备用出口。
 
@@ -75,6 +76,18 @@ sudo pfctl -a io.github.surge-guard -F rules
 ```
 
 第一条提示找不到服务时可以继续第二条；其他错误应先解决，避免仍在运行的服务重新阻断。紧急恢复不会关闭整个 PF，也不会清空其他应用的规则。
+
+## 日志
+
+关键状态同时写入 macOS 统一日志和 root 专属文件：
+
+```sh
+sudo tail -n 100 /private/var/db/surge-guard/events.log
+log show --last 1d --style compact \
+  --predicate 'process == "surge-guard" AND eventMessage BEGINSWITH "surge-guard:"'
+```
+
+私有日志权限为 `0600`，达到 1 MiB 时轮转为 `events.log.1`。它只记录放行、阻断、PF 恢复和错误，不记录应用、域名、目标 IP 或数据包内容；卸载后保留，方便审计。
 
 ## 需要了解的限制
 

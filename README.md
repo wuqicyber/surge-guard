@@ -13,7 +13,7 @@ This is an independent, unofficial utility, not a Surge feature. It preserves Su
 | Surge closed | Blocked |
 | Surge open, Enhanced Mode off | Blocked |
 | Surge starting or VIF not ready | Blocked |
-| Signed Surge process + connected Surge extension + active VIF/default route | Allowed |
+| Signed Surge process + connected Surge extension + active VIF/IPv4 route + safe global IPv6 state | Allowed |
 | Enhanced Mode stops or Surge exits | Blocked |
 | Tailscale or another VPN is active without Surge | Blocked |
 | Surge Enhanced Mode becomes ready again | Allowed |
@@ -88,16 +88,18 @@ If `bootout` says the service is not found, continue with the second command. If
 
 ## Implementation
 
-The daemon reads SystemConfiguration directly and verifies the running Surge code signature. It requires the primary service to belong to Surge, its Network Extension to be connected, its VIF to be up with the expected address, and the IPv4 default route to select that VIF. It never runs Surge or its user-owned CLI as root.
+The daemon reads SystemConfiguration directly and verifies the running Surge code signature. It requires the primary service to belong to Surge, its Network Extension to be connected, its VIF to be up with the expected address, the IPv4 default route to select that VIF, and any global IPv6 primary interface to select the same VIF. It never runs Surge or its user-owned CLI as root.
 
-SystemConfiguration notifications trigger reconciliation. A 0.5-second timer covers process exit and missed notifications. It does not subscribe to raw route-query notifications, avoiding the `route get` / `route monitor` feedback loop. External system commands have timeouts and bounded output. No shell strings or user-supplied commands are executed as root.
+SystemConfiguration notifications trigger immediate reconciliation. A validated Surge PID is cached and watched for exit. A 0.5-second timer covers missed readiness notifications, while full PF integrity is audited every five seconds and on network changes. It does not subscribe to raw route-query notifications, avoiding the `route get` / `route monitor` feedback loop. External system commands have bounded output and operation-specific timeouts. No shell strings or user-supplied commands are executed as root.
 
-The guard reads back PF enablement, attachment and anchor content each cycle. Unexpected changes trigger blocking before readiness is checked again. A PF failure logs an error, attempts to block, and exits so launchd can restart it. Failure to program PF is an error, **not a claim that the Mac is protected**. States involving local addresses are terminated on block transitions; a global `pfctl -Fa`/`-F states` is never used. PF ownership is tracked using `-E`/`-X` references.
+The guard reads back PF enablement, attachment and anchor content on forced and periodic audits. Unexpected changes trigger blocking before readiness is checked again. A PF failure logs an error, attempts to verify fail-closed rules, and exits so launchd can restart it. Failure to program PF is an error, **not a claim that the Mac is protected**. States involving local addresses are terminated on block transitions; a global `pfctl -Fa`/`-F states` is never used. PF ownership is tracked using `-E`/`-X` references.
 
-Logs are available in Console or:
+Key events are written both to the unified log and a root-only, 1 MiB rotating file. Neither log records application traffic, destinations or packet contents:
 
 ```sh
-log show --last 10m --predicate 'process == "surge-guard"'
+sudo tail -n 100 /private/var/db/surge-guard/events.log
+log show --last 1d --style compact \
+  --predicate 'process == "surge-guard" AND eventMessage BEGINSWITH "surge-guard:"'
 ```
 
 Boot initialization verifies and, if absent, attaches the managed PF anchor itself; it does not require Apple's PF loader to have run first. It then blocks before evaluating Surge. This makes initialization independent of daemon ordering, **not a guarantee of being the first process or preceding every boot-time packet**. Locks and PF reference tokens live in the root-owned `/private/var/db/surge-guard`; stale tokens are validated against the live PF reference list after reboot.

@@ -13,14 +13,15 @@ func rejects(_ operation: () throws -> Void) throws {
 }
 
 do {
-    for mask in 0..<32 {
+    for mask in 0..<64 {
         let state = Readiness(trustedProcess: mask & 1 != 0,
                               surgeService: mask & 2 != 0, connected: mask & 4 != 0,
-                              vifUp: mask & 8 != 0, ownsDefaultRoute: mask & 16 != 0)
-        try check(state.ready == (mask == 31), "Incorrect readiness for mask \(mask)")
-        try check(state.reasons.isEmpty == (mask == 31), "Missing failure reason")
+                              vifUp: mask & 8 != 0, ownsDefaultRoute: mask & 16 != 0,
+                              ipv6Safe: mask & 32 != 0)
+        try check(state.ready == (mask == 63), "Incorrect readiness for mask \(mask)")
+        try check(state.reasons.isEmpty == (mask == 63), "Missing failure reason")
     }
-    print("PASS: all 32 readiness combinations")
+    print("PASS: all 64 readiness combinations")
 
     let config = """
     # Existing configuration
@@ -68,13 +69,24 @@ do {
     try check(Policy.defaultInterface("interface: utun9 extra") == nil, "Malformed route accepted")
     print("PASS: route parser")
 
+    try check(Policy.ipv6Safe(primaryInterface: nil, surgeInterface: "utun9"), "Missing global IPv6 route must be safe")
+    try check(Policy.ipv6Safe(primaryInterface: "utun9", surgeInterface: "utun9"), "Surge IPv6 route rejected")
+    try check(!Policy.ipv6Safe(primaryInterface: "en0", surgeInterface: "utun9"), "Physical IPv6 route accepted")
+    try check(!Policy.ipv6Safe(primaryInterface: "", surgeInterface: "utun9"), "Malformed IPv6 state accepted")
+    print("PASS: IPv6 safety gate")
+
     // -n is parse-only; never enable PF or touch live rules/state in tests.
     let parser = try Command.run("/sbin/pfctl", ["-n", "-a", Policy.anchor, "-f", "-"], input: Policy.blocked)
     try check(parser.status == 0, "PF parser rejected policy: \(parser.combined)")
     print("PASS: native macOS PF parser")
 
     var started = Date()
-    try rejects { _ = try Command.run("/bin/sleep", ["5"], timeout: 0.05) }
+    do {
+        _ = try Command.run("/bin/sleep", ["5"], timeout: 0.05)
+        throw GuardError("Expected timeout")
+    } catch {
+        try check(String(describing: error).contains("/bin/sleep 5 timed out"), "Timeout omitted command context")
+    }
     try check(Date().timeIntervalSince(started) < 2, "Timeout did not terminate child")
     started = Date()
     try rejects { _ = try Command.run("/usr/bin/yes", [], timeout: 0.1) }
