@@ -1,0 +1,28 @@
+README.md
+  h_debc74f7d1c6f4 16,91,93,95,97,100-102
+README.zh-CN.md
+  h_debc74f7d1c6f4 11,18,20,80-91
+Sources/SurgeGuard/main.swift
+  h_debc74f7d1c6f4 8-37,49-52,61-93,96-103,106-108,116,120-121,131,135,142-143,156,212
+Sources/SurgeGuardCore/Firewall.swift
+  h_debc74f7d1c6f4 9,87,110,119-122,140-143,150-151,159,169,176
+Sources/SurgeGuardCore/Policy.swift
+  h_debc74f7d1c6f4 9,12,18,22,30-31,118-121
+Sources/SurgeGuardCore/System.swift
+  h_debc74f7d1c6f4 19,57-60,63,74-75,110,112,116,123,126-130,133,141,144-145,154,156-157
+Tests/SurgeGuardTests/main.swift
+  h_debc74f7d1c6f4 16,19-22,24,72-77,84-89
+docs/verification.md
+  h_debc74f7d1c6f4 7,9,37-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "9ae805c93edb4cd548c478a05f26fe2ffd717c4c",
+  "prompts": {},
+  "humans": {
+    "h_debc74f7d1c6f4": {
+      "author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
