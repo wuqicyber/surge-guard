@@ -224,7 +224,7 @@ other private projects are part of this plugin. Normal menu text follows the
 system appearance; secondary/error colors have light and dark variants.
 The companion is green only with fresh running/ready status, no pending apps
 and a currently verified allowed network gate. Waiting/stale states are orange;
-errors are red. The display name is `SurgeGuard` without a space.
+errors are red. The SwiftBar display names are `surge-guard` and `surge-gate`.
 
 ### Application configuration
 
@@ -258,7 +258,7 @@ are logged for manual conversion. Keep the old files until migration is verified
 
 ### Ordered shutdown
 
-Use SwiftBar → **SurgeGate** → the power section at the top (blue restart,
+Use SwiftBar → **surge-gate** → the power section at the top (blue restart,
 red shutdown), or:
 
 ```sh

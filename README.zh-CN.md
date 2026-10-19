@@ -154,7 +154,7 @@ scripts/install-user.sh --menu-only
 
 菜单区分放行、阻断、手动解除、停止和未知；展示检查时间、规则结果、具体原因、SurgeGate
 状态，并提供日志、诊断、规则草稿、重启和临时恢复入口。采用系统文字颜色和明暗双配色。
-显示名为 `SurgeGuard`。SurgeGate 只有在服务运行、状态新鲜、已就绪、无待恢复应用且系统门禁
+菜单显示名为 `surge-guard` 和 `surge-gate`。surge-gate 只有在服务运行、状态新鲜、已就绪、无待恢复应用且系统门禁
 已验证放行时才显示绿色；等待／过期为橙色，错误为红色。
 
 SurgeGate 本轮已改为同包 Swift 程序，无需 Python。它只相信近期有效的系统守护状态，

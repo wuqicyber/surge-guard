@@ -219,3 +219,18 @@ and UI deployment alone cannot establish that the root writer was replaced.
 No external target request, Surge toggle, PF change, app quit or OS power action
 was performed during these checks. Long-duration, power-loss and disruptive
 acceptance items above remain unperformed.
+
+## Lowercase menu names and main-branch review — 2026-10-19
+
+- Changed the SwiftBar labels, companion action labels, plugin metadata and
+  recovery fallback/banner to `surge-guard` and `surge-gate`. Stable service
+  labels, executable paths and stored configuration paths are unchanged.
+- Built the release guard with warnings as errors. Updated only the user menu
+  through `--recovery-only` and refreshed the combined plugin; the isolated
+  installed output confirms both lowercase names with verified green status.
+  Neither service was restarted for this display change.
+- Re-read installation/recovery, configuration/rule validation, privilege drop,
+  status freshness, bounded logging and companion launch/shutdown flows before
+  merging. Re-ran `scripts/check.sh`: all 28 groups and release/shell checks pass.
+  No new blocking code issue was found in that review. Remaining live acceptance
+  and the pending system-binary installation described above still apply.

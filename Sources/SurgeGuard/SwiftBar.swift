@@ -17,7 +17,7 @@ enum SwiftBar {
         var lines = sectionOnly ? [] : ["\(icon) | size=13", "---"]
         // SwiftBar 2.1.1 clears submenu actions during live updates; a color preserves the action.
         let parentStyle = " | color=#1F2937,#F2F2F7"
-        lines.append("SurgeGuard · \(icon) \(title)" + parentStyle)
+        lines.append("surge-guard · \(icon) \(title)" + parentStyle)
         if let snapshot = status.snapshot {
             let current = status.firewallVerified
             lines.append("-- 配置：\(snapshot.configurationMode == "routes" ? "增强模式 + 分流检查" : "增强模式")" + parentStyle)
@@ -79,7 +79,7 @@ enum SwiftBar {
             let gateReport = (try? Command.checked(CLI.gateBinary, ["status", "--json"], timeout: 3))
                 .flatMap { try? JSON.decode(GateStatusReport.self, from: Data($0.utf8)) }
             let gateTitle = gateReport?.menuTitle(guardAllowed: status.state == "allowed" && status.firewallVerified) ?? "🟠 状态待验证"
-            lines.append("SurgeGate · \(gateTitle)" + parentStyle)
+            lines.append("surge-gate · \(gateTitle)" + parentStyle)
             lines.append("-- 电源操作 · 先保存应用会话" + parentStyle + " size=13")
             for (title, action, color, symbol) in [("有序重启电脑（保存会话）", "restart", "#1D4ED8,#93C5FD", "arrow.clockwise"),
                                                    ("有序关机（保存会话）", "shutdown", "#B91C1C,#FCA5A5", "power")] {
@@ -88,14 +88,14 @@ enum SwiftBar {
             lines.append("-- 有未保存内容时请处理应用提示；超时会中止 | color=#595959,#C7C7CC size=12")
             lines.append("-----")
             lines.append("-- 管理与日志" + parentStyle + " size=13")
-            for (title, args, symbol) in [("查看 SurgeGate 日志", ["logs"], "doc.text"), ("实时跟踪 SurgeGate 日志", ["logs", "--follow"], "waveform"), ("重启 SurgeGate 服务", ["restart"], "arrow.triangle.2.circlepath"), ("编辑应用配置", ["edit-config"], "gearshape")] {
+            for (title, args, symbol) in [("查看 surge-gate 日志", ["logs"], "doc.text"), ("实时跟踪 surge-gate 日志", ["logs", "--follow"], "waveform"), ("重启 surge-gate 服务", ["restart"], "arrow.triangle.2.circlepath"), ("编辑应用配置", ["edit-config"], "gearshape")] {
                 lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) " + args.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true size=14 sfimage=\(symbol) width=16 height=16")
             }
         } else {
             let legacyGate = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".surge_gate/surge_gate.py").path
             let gateTitle = FileManager.default.fileExists(atPath: legacyGate) ? "旧版待迁移，运行状态未验证" : "未安装"
-            lines.append("SurgeGate · \(gateTitle) | color=#595959,#C7C7CC")
-            lines.append("-- 有序重启 / 关机：需先安装 SurgeGate | color=#595959,#C7C7CC")
+            lines.append("surge-gate · \(gateTitle) | color=#595959,#C7C7CC")
+            lines.append("-- 有序重启 / 关机：需先安装 surge-gate | color=#595959,#C7C7CC")
         }
         return lines.joined(separator: "\n") + "\n"
     }

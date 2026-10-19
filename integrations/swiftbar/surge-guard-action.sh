@@ -39,10 +39,10 @@ case "$action" in
             exit 1
         fi ;;
 esac
-printf 'SurgeGuard · %s\n' "$action"
+printf 'surge-guard · %s\n' "$action"
 case "$action" in
     restart|start) printf '%s\n' 'Connections may briefly reset. Protection remains armed. Waiting for the actual result; do not click repeatedly.' ;;
-    unlock) printf '%s\n' 'WARNING: this explicitly removes Surge Guard protection until Start guard or next boot. Other PF anchors remain unchanged.' ;;
+    unlock) printf '%s\n' 'WARNING: this explicitly removes surge-guard protection until Start guard or next boot. Other PF anchors remain unchanged.' ;;
     rollback) printf '%s\n' 'Restores the previous binary, service and policy. An older version may have fewer protection checks. Connections may reset.' ;;
     restore-policy) printf '%s\n' 'Restores the policy saved before the last change. Its allowed routes may differ.' ;;
 esac
