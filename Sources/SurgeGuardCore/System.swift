@@ -85,6 +85,64 @@ public struct InterfaceAddress {
 }
 
 public enum Probe {
+    public static let surgeCLI = "/Applications/Surge.app/Contents/Applications/surge-cli"
+
+    public static func consoleUID() throws -> uid_t {
+        var uid: uid_t = 0
+        guard SCDynamicStoreCopyConsoleUser(nil, &uid, nil) != nil, uid >= 501 else {
+            throw GuardError("No interactive user session; waiting for login")
+        }
+        return uid
+    }
+
+    public static func dropPrivileges(to uid: uid_t) throws {
+        guard geteuid() == 0, uid == (try consoleUID()), let account = getpwuid(uid) else {
+            throw GuardError("Cannot resolve the console user for privilege drop")
+        }
+        let name = String(cString: account.pointee.pw_name)
+        let gid = account.pointee.pw_gid
+        guard initgroups(name, Int32(gid)) == 0,
+              setgid(gid) == 0, setuid(uid) == 0,
+              getuid() == uid, geteuid() == uid else {
+            throw GuardError("Cannot enter the console user's unprivileged session")
+        }
+    }
+
+    public static func session(configuration: Configuration) throws -> SessionObservation {
+        guard geteuid() != 0, getuid() == (try consoleUID()) else {
+            throw GuardError("Surge CLI queries must run as the console user")
+        }
+        let status = try Command.checked(surgeCLI, ["--raw", "status"])
+        guard let object = try JSONSerialization.jsonObject(with: Data(status.utf8)) as? [String: Any],
+              let mode = object["mode"] as? String,
+              let features = object["features"] as? [String: Any],
+              let enhanced = features["enhanced-mode"] as? Bool else {
+            throw GuardError("Surge returned incomplete mode/feature status")
+        }
+        var routes: [RouteResult] = []
+        for check in configuration.routeChecks {
+            // shortcut: URL default context only; add request overrides when gating process/protocol-specific rules.
+            let response = try Command.checked(surgeCLI, ["--raw", "rule", "explain", check.url])
+            routes.append(try RouteResult.evaluate(Data(response.utf8), check: check))
+        }
+        return SessionObservation(policyFingerprint: try configuration.fingerprint(), mode: mode, enhancedMode: enhanced, routes: routes)
+    }
+
+    public static func privilegedSession(configuration: Configuration, helperPath: String = Paths.binary) throws -> SessionObservation {
+        let uid = try consoleUID()
+        try RootFiles.verify(helperPath)
+        // Enter the user's bootstrap namespace, then drop UID/GID inside our
+        // root-owned helper before executing any user-owned Surge code.
+        let response = try Command.checked("/bin/launchctl", ["asuser", String(uid), helperPath, "session-probe", String(uid)],
+                                           timeout: Double(configuration.routeChecks.count + 1) * 3 + 3)
+        guard uid == (try consoleUID()) else { throw GuardError("Console user changed during rule probe") }
+        let observation = try JSON.decode(SessionObservation.self, from: Data(response.utf8))
+        guard observation.policyFingerprint == (try configuration.fingerprint()) else {
+            throw GuardError("Policy changed during query; run candidate --config checks as the normal user")
+        }
+        return observation
+    }
+
     public static func addresses() -> [InterfaceAddress] {
         var first: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&first) == 0 else { return [] }

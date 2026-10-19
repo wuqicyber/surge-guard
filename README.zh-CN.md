@@ -1,106 +1,200 @@
 # Surge Guard
 
-macOS 上的 Surge 自动断网工具：**Surge 正在运行且增强模式实际就绪时允许联网，否则阻断普通网络流量。**
+同一公开仓库管理三个组件：系统级网络门禁 `surge-guard`、用户级应用启动与恢复服务
+`surge-gate`、SwiftBar 菜单。Swift 实现，无第三方运行时依赖。
 
-这是独立开源项目，与 Surge 官方无关联。Swift 实现，无第三方运行时依赖，不读取节点、订阅或 Surge 配置文件。支持保留现有分流和 `DIRECT` 策略。
+默认行为是“Surge 增强模式就绪才允许普通联网”；也可配置“增强模式就绪，且指定域名
+分流到指定策略组和允许节点才放行”。域名、策略组、节点和应用列表都属于本机配置，
+公共代码不绑定某个用户、服务或网络。
 
-**当前为实验版本。它是基于状态检测的自动断网工具，不能保证开机全程、状态切换瞬间或守护进程被强制结束时零数据包泄漏。** 已通过的单元测试和 PF 语法检查不等于真实断网验收。请参阅下文限制和[实机验收步骤](docs/acceptance.md)。
+Surge 增强模式接管正常应用流量，再按其规则代理或 DIRECT。本工具检查接管就绪并控制
+PF；它仍是实验性外部门禁，不能证明每个数据包都不可绕过，也不能保证开机最早阶段或
+守护被强杀时零泄漏。完整命令与协议以 [README.md](README.md) 为准。
 
-## 工作方式
+## Agent 从这里开始
 
-系统服务独立于 Surge 常驻，由 macOS `launchd` 管理；只有以下六项全部满足才放行：
+1. 阅读 README 和 `AGENTS.md`，先检查已有安装、配置、服务和日志。
+2. 构建并执行只读检查。`check` 成功只代表条件通过，不代表 PF 已运行。
+3. 为目标机器准备明确的配置，先验证，再安装。
+4. 安装系统守护并确认状态，再以普通用户安装 SurgeGate 和 SwiftBar。
+5. 排障从 `doctor`、最近日志和具体原因开始；实机验收单独记录，不用构建成功代替。
 
-1. 存在代码签名属于 Surge 官方的主进程。
-2. 当前主网络服务属于 Surge 的 Network Extension。
-3. 该扩展状态为已连接。
-4. 对应 `utun` 网卡处于启用状态，并具有 Surge 的 `198.18.0.1` 地址。
-5. 当前 IPv4 默认路由指向该网卡。
-6. 没有全局 IPv6 主接口，或该接口同样属于 Surge。
+不要将本机配置、Surge profile、订阅、节点凭据、原始日志或诊断包提交到 GitHub。
 
-不固定 `utun9` 等接口编号，也不按 VPN 显示名称识别，因此其他 VPN 在线不等于 Surge 就绪。网络变化触发立即检查，已验证的 Surge PID 会被缓存并监听退出；每 0.5 秒复核就绪状态，每 5 秒完整审计 PF。实际响应还包含系统调度和防火墙执行时间。
+## 构建与只读检查
 
-阻断时同时处理 IPv4/IPv6、普通入站/出站流量，并清除涉及本机地址的既有 PF 连接状态。保留 `localhost`、DHCP 和必要的 IPv6 本地链路配置，不关闭 Wi-Fi 或网卡。互联网、普通局域网访问及其他 VPN 不能作为有意放行的备用出口。
-
-就绪后只撤销本工具的阻断，保留现有网络行为。**这并不证明所有应用请求都必定经过 Surge**：Surge 的排除路由、其他 VPN 路由和物理网卡绑定仍按现有设置工作。它实现“Surge 就绪才允许联网”，不是“每个数据包必须代理”的强制隔离。
-
-## 编译与只读检查
-
-需要 macOS 13+、Swift 5.9+（Xcode Command Line Tools）和使用 Network Extension 的 Surge Mac 增强模式。单独 Gateway VM 不满足条件。
+需要 macOS 13+、Swift 5.9+ / Xcode Command Line Tools，以及 Network Extension 版本的
+Surge Mac 增强模式。分流检查需要支持 `rule explain` 的 Surge CLI（Mac 6.9+）。
 
 ```sh
-swift run surge-guard-tests
-swift build -c release --product surge-guard
-.build/release/surge-guard check
-.build/release/surge-guard rules
+scripts/check.sh
+.build/release/surge-guard check --json
+.build/release/surge-guard status --json
 ```
 
-测试不加载防火墙、不退出 Surge。`check` 只显示 Surge 就绪状态，退出码 0 表示就绪，1 表示未就绪；不代表 PF 防护已启动。
+构建会产生两个程序。未安装新版守护时，`status` 显示未知是合理结果。
+检查脚本不加载防火墙、不退出应用，也不安装任何服务。
 
-## 安装与启用
+## 配置联网条件
 
-保持本机终端可用，先离线保存恢复命令：
+仅检查增强模式，沿用原有行为：
+
+```json
+{"version":1,"mode":"enhanced","route_checks":[]}
+```
+
+默认必须通过六项：Surge 官方签名进程、主服务属于 Surge、扩展已连接、VIF 已启用且地址
+正确、IPv4 默认路由指向 VIF、没有冲突的全局 IPv6 主接口。不固定 utun 编号。
+
+需要分流条件时，复制通用示例，填写目标机器上的真实值：
+
+```sh
+cp examples/routes.json policy.local.json
+.build/release/surge-guard validate policy.local.json
+.build/release/surge-guard check --config policy.local.json --json
+```
+
+```json
+{
+  "version": 1,
+  "mode": "routes",
+  "route_checks": [
+    {
+      "url": "https://example.com",
+      "required_group": "Residential",
+      "allowed_final_policies": ["Residential A", "Residential B"]
+    }
+  ]
+}
+```
+
+`routes` 模式要求增强模式就绪、当前为 Rule 模式、所有 URL 检查均通过。
+策略组名称精确匹配，并解析到白名单中的最终代理，支持嵌套组。
+DIRECT/REJECT、错误节点、空白名单、无效配置、查询失败或过期都不放行。
+不会根据名称中“包含美国”等文字猜测节点属性，也不进行出口 IP 或网站连通性探测。
+配置 URL 使用默认请求上下文；实际应用的进程、协议或 URL 特定规则可能影响结果。
+
+本机策略和状态文件可供普通用户读取，禁止在 URL、查询参数或策略名称中放入秘密。
+最多八条检查，未知配置字段会被拒绝。
+
+## 安装／升级系统守护
+
+在本机操作，预先离线保存恢复命令：
 
 ```sh
 sudo /Library/PrivilegedHelperTools/surge-guard unlock
 ```
 
-在项目目录运行：
-
 ```sh
+sudo .build/release/surge-guard configure policy.local.json
 sudo .build/release/surge-guard install
-sudo /Library/PrivilegedHelperTools/surge-guard start
-sudo /Library/PrivilegedHelperTools/surge-guard status
 ```
 
-安装会写入 root 所有的程序、LaunchDaemon、默认阻断规则，并在 `/etc/pf.conf` 添加标记清晰的独立 anchor。原配置备份至 `/private/etc/pf.conf.surge-guard.backup`。安装阶段不修改运行中的 PF，但安装好的服务会在下次开机加载。
-
-首次启动需要将 anchor 接入运行中的 PF，可能重载主配置。已有自定义 PF 规则需要先检查；正常运行只维护本工具的 anchor。启动时会短暂阻断并重建连接，SSH、下载和远程桌面可能中断，建议在本机操作。
-
-## 恢复与卸载
+首次不执行 `configure` 时生成 enhanced 配置；升级保留已有配置。
+全新安装还需要启动：
 
 ```sh
-# 临时解除：停止服务，清除自己的规则，释放自己的 PF 引用。
-sudo /Library/PrivilegedHelperTools/surge-guard unlock
+sudo /Library/PrivilegedHelperTools/surge-guard start
+/Library/PrivilegedHelperTools/surge-guard status --json
+sudo /Library/PrivilegedHelperTools/surge-guard doctor
+```
 
-# 永久卸载：删除程序、系统服务、anchor 和精确匹配的配置段。
+升级已运行服务时自动正常停止、保留阻断、原子替换并重启，不需要先 unlock。
+分流模式升级会在停止旧服务前，先用暂存的新程序验证用户会话查询通路；预检失败就中止升级，
+因此升级时保持 Surge 运行。此预检不修改 PF。
+可能短暂中断已有连接；失败时可能保持断网，应使用离线恢复命令。
+系统守护以 root 运行，但执行用户所有的 Surge CLI 前，会进入登录用户会话并降低权限。
+
+## 安装 SurgeGate 和 SwiftBar
+
+新版系统守护安装完成后，以普通用户执行：
+
+```sh
+scripts/install-user.sh
+```
+
+自动读取 SwiftBar 插件目录，也可显式传入目录。已有单一控制中心时使用：
+
+```sh
+scripts/install-user.sh --menu-only
+```
+
+再将控制中心中旧的 Surge 渲染逻辑替换为：
+
+```sh
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-menu" --section
+```
+
+菜单区分放行、阻断、手动解除、停止和未知；展示检查时间、规则结果、具体原因、SurgeGate
+状态，并提供日志、诊断、规则草稿、重启和临时恢复入口。采用系统文字颜色和明暗双配色。
+
+SurgeGate 本轮已改为同包 Swift 程序，无需 Python。它只相信近期有效的系统守护状态，
+不会使用“代理端口通＋任意 utun”的备用判定。启动 Surge 后等待就绪，不自动更改增强模式偏好或分流选择。
+
+应用设置位于 `~/Library/Application Support/SurgeGuard/gate.json`，参照 `examples/gate.json`：
+
+- `startup_apps`：每次就绪后启动的应用 Bundle ID。
+- `priority_order`：恢复／启动的优先顺序。
+- `excluded_apps`：不参与会话恢复和有序退出的应用。
+- `restore_session`：是否恢复上次应用列表。
+- `delay_between_apps_seconds`：成功启动间隔，0–30 秒。
+- `quit_timeout_seconds`：正常退出等待时间，5–300 秒，超时中止关机。
+
+应用必须用 Bundle ID，避免中英文名称差异。失败应用保留待重试，不直接丢弃。
+每 30 秒原子保存一次应用列表和待恢复项，断电时尽量恢复最近记录；不能保证最后一次落盘之后
+的变化，也不负责恢复应用文档或窗口。其他登录项仍可能自行启动，流量阻断由系统守护负责。
+
+安装时迁移 `~/.surge_gate` 中可识别的旧配置／会话，保留原文件；停用旧登录任务并将旧 plist
+改名保存。无法识别的应用名称写入迁移日志，供手动补全。
+
+## 有序关机／重启
+
+```sh
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" shutdown --action restart
+# 或 --action shutdown
+```
+
+请求交由独立的用户服务处理，退出调用终端不会截断流程。
+先保存会话，正常请求应用退出，确认后最后退出 Surge，验证 PF 已阻断，再请求 macOS 关机。
+有未保存内容时由应用显示正常提示，拒绝／超时就中止；不使用 SIGKILL、宽泛 pkill，
+也不修改系统全局恢复设置。最后一步可能需要系统自动化权限。
+它不拦截所有 Apple 菜单关机、断电或内核故障。
+
+## 排查与管理
+
+```sh
+/Library/PrivilegedHelperTools/surge-guard doctor
+sudo /Library/PrivilegedHelperTools/surge-guard doctor
+sudo /Library/PrivilegedHelperTools/surge-guard logs
+sudo /Library/PrivilegedHelperTools/surge-guard logs --follow
+# agent 或脚本需要原始结构时：
+sudo /Library/PrivilegedHelperTools/surge-guard logs --json
+```
+
+普通用户诊断无需授权；sudo doctor 增加实时 PF 检查。
+日志默认按本地时间、级别、放行／阻断结果、中文原因、预期和实际策略、最终节点分行显示，
+先显示最近 200 条，再按需持续跟踪。`--json` 保留供 agent 读取的 JSON Lines。
+`status --json` 正常生成报告时退出码为 0，要读取 `state`，不能只看退出码。
+`check --json` 的退出码 0 表示条件通过，1 表示未通过／错误。
+JSON 使用 snake_case，状态有 allowed、blocked、unlocked、stopped、unknown。
+
+状态绑定本次开机和 PID，检查及 PF 审计超过 8 秒过期；分流结果从查询开始计时，3 秒过期。
+守护约每 0.5 秒检查增强模式、1 秒查询分流、5 秒审计 PF；这些不是断网延迟上限。
+日志包含状态变化、策略变化、查询错误、配置加载和管理操作，1 MiB 轮转。
+系统私有日志保留 root 权限，不为了菜单展示放宽访问。
+
+[故障排查](docs/troubleshooting.md)提供按原因定位的步骤；
+[实机验收](docs/acceptance.md)区分新增连接、已有连接、IPv6、重启和睡眠唤醒；
+[验证记录](docs/verification.md)只记录实际完成的项目。
+
+## 卸载与保留数据
+
+```sh
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" uninstall
 sudo /Library/PrivilegedHelperTools/surge-guard uninstall
 ```
 
-`unlock` 后重新 `start` 或重启会重新启用。`uninstall` 不恢复整份旧备份，以保留你后来对 PF 的修改；原始备份和无活动作用的运行目录会保留。
+再移除独立 SwiftBar 插件或组合菜单中的调用。卸载保留配置、会话、日志与原始 PF 备份，
+只删除自己的 PF 配置段，不覆盖其他服务的配置。
 
-如果程序不可用，在本机终端依次执行：
-
-```sh
-sudo launchctl bootout system/io.github.surge-guard
-sudo pfctl -a io.github.surge-guard -F rules
-```
-
-第一条提示找不到服务时可以继续第二条；其他错误应先解决，避免仍在运行的服务重新阻断。紧急恢复不会关闭整个 PF，也不会清空其他应用的规则。
-
-## 日志
-
-关键状态同时写入 macOS 统一日志和 root 专属文件：
-
-```sh
-sudo tail -n 100 /private/var/db/surge-guard/events.log
-log show --last 1d --style compact \
-  --predicate 'process == "surge-guard" AND eventMessage BEGINSWITH "surge-guard:"'
-```
-
-私有日志权限为 `0600`，达到 1 MiB 时轮转为 `events.log.1`。它只记录放行、阻断、PF 恢复和错误，不记录应用、域名、目标 IP 或数据包内容；卸载后保留，方便审计。
-
-## 需要了解的限制
-
-服务在系统域开机启动，不依赖用户登录。启动时会检查并按需自行接入 PF anchor，然后先阻断再检查 Surge，不依赖 Apple 的 PF 加载服务先运行。锁文件和 PF 引用位于 root 专属的 `/private/var/db/surge-guard`。这些措施处理启动顺序变化，但不能保证它是开机第一个进程。
-
-- 检测和防火墙更新之间存在时间窗口；0.5 秒不是延迟上限。
-- `RunAtLoad` 不能保证早于开机阶段的所有网络请求，PF 规则在启用和加载前不起作用。
-- 放行时守护进程被 `SIGKILL`、卡死或无法被系统重启，可能维持放行。普通退出清理无法覆盖这些情况。
-- “就绪”指本地增强模式接管已建立，不是所有网站或代理节点都可访问；避免依赖外网探测造成恢复死锁。
-- 阻断时有明确的本地链路配置例外，不是物理链路上一包不发。
-- Apple 不将第三方 PF/路由修改视为稳定的 VPN 集成接口；升级 macOS、Surge 或其他网络软件后需要复测。
-- 此项目不用于防御 root 权限恶意程序，也未完成实机重启、睡眠唤醒及全协议防泄漏认证。
-
-当前应按实验性自动断网工具评估。严格的永不直连保证需要 VPN/网络过滤架构本身持续执行限制，无法由一个外部状态监听程序补上。
-
-[英文文档](README.md)包含实现、命令和参考项目；[实机验收](docs/acceptance.md)区分新连接、既有连接、IPv4/IPv6、恢复和开机状态。MIT 许可证，代码为独立实现，未复制参考项目源码。
+此项目与 Surge 官方无关联，MIT 许可证。

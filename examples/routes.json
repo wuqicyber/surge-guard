@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "mode": "routes",
+  "route_checks": [
+    {
+      "url": "https://example.com",
+      "required_group": "Residential",
+      "allowed_final_policies": ["Residential A", "Residential B"]
+    }
+  ]
+}

@@ -8,9 +8,21 @@ public enum Paths {
     public static let runtime = "/private/var/db/surge-guard"
     public static let eventsLog = runtime + "/events.log"
     public static let pfConfig = "/private/etc/pf.conf"
+    public static let publicState = "/Library/Application Support/SurgeGuard"
+    public static let configuration = publicState + "/policy.json"
+    public static let snapshot = publicState + "/status.json"
+    public static let unlockMarker = publicState + "/unlocked.json"
 }
 
 public enum RootFiles {
+    public static func preparePublicState() throws {
+        try verify("/Library/Application Support", directory: true)
+        if !FileManager.default.fileExists(atPath: Paths.publicState) {
+            try FileManager.default.createDirectory(atPath: Paths.publicState, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o755])
+        }
+        try verify(Paths.publicState, directory: true)
+    }
     public static func verify(_ path: String, directory: Bool = false) throws {
         var info = stat()
         guard lstat(path, &info) == 0,

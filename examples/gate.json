@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "startup_apps": [],
+  "priority_order": [],
+  "excluded_apps": [],
+  "restore_session": true,
+  "delay_between_apps_seconds": 1,
+  "quit_timeout_seconds": 30
+}

@@ -46,3 +46,38 @@ Initial development had no administrator access; the subsequent live test used t
 - Installed SHA-256: `73d31e78b805fffa8af366e823ed9e3a37c1284f6fc8d7a56ae4afe52f0af42d`.
 - Post-update status: daemon loaded, PF enabled, managed anchor first, all six readiness fields true, live guard anchor empty. The private event log was created as `root:wheel` mode `0600` and recorded the `ALLOWED` transition.
 - Live blocking and reboot acceptance were not repeated for this source revision.
+
+## Configurable gate and native companion — 2026-10-19
+
+Completed without administrator privileges or changing installed services:
+
+- Standalone tests pass, including existing 64 readiness combinations/PF syntax,
+  policy validation and fingerprints, nested group decisions, wrong/unlisted/
+  direct targets, malformed responses, boot-bound freshness, stale PF audits,
+  bundle-ID ordering/exclusions, preserved pending session data, and readable/
+  machine/legacy log rendering. The real tail-to-render pipeline was exercised
+  using a temporary fixture, including a final line without a newline.
+- Both release executables build with warnings treated as errors. Generic
+  examples validate, shell integrations parse, and help/rules/menu commands
+  remain non-mutating. `install --help` displays help without entering install.
+- A temporary private policy using the target Mac's current group and final
+  proxy passed the unprivileged live condition check. Replacing the allowlist
+  with an unlisted test node correctly failed without modifying Surge/PF.
+- Invalid route configuration returned a machine-readable failure. The old
+  installed daemon was correctly identified as running while new-schema PF
+  status remained unknown, avoiding a false green protection claim.
+- Public source/examples/docs were checked for machine-specific domains, node
+  names and personal paths; local policy data was not added to the repository.
+
+Not performed in this session:
+
+- Privileged helper execution, system daemon update/restart, live PF transitions
+  and actual installation/migration of the new user service/menu. `sudo -n`
+  requires a password on the target machine.
+- Native application quit/launch acceptance, refusal/unsaved-document prompts,
+  real shutdown, reboot/power-loss recovery or sleep/wake acceptance.
+- Live light/dark visual acceptance of the installed new menu.
+
+These are source and read-only checks, not a new live protection certification.
+The existing installed protection was left running. Follow `acceptance.md`
+after authorized local deployment before relying on the new version.
