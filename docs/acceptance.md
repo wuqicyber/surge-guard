@@ -29,8 +29,8 @@ For each transition, record the time, `surge-guard check`, root `status`, logs, 
 | Enhanced Mode starting | Blocked until all readiness checks pass | Startup state |
 | Enhanced Mode ready | Existing Surge routing policy works | Proxy + DIRECT compatibility |
 | Routes mode, all configured URL/group/node checks pass | Allowed after a recent user-session query | Policy gate |
-| Wrong group, unlisted node, DIRECT result, or Direct/Global mode | Blocked | No route-condition bypass |
-| Change to another allowlisted node | Allowed; parsed route change appears in logs | Successful decision audit |
+| Wrong group, unlisted node when a list is configured, DIRECT result, or Direct/Global mode | Blocked | No route-condition bypass |
+| Group-only policy with a changed proxy in the same group, or another allowlisted proxy when a list is configured | Allowed; parsed route change appears in logs | Group-only matching and optional node restriction |
 | CLI fails, hangs, user logs out, or rule result expires | Blocked; specific reason recorded | Query failure and freshness |
 | Invalid/missing installed policy | Blocked; no readiness-only fallback | Configuration failure |
 | Old boot/PID or stale status/PF audit | Menu reports unknown/stopped; Gate does not restore apps | No cached green status |

@@ -4,12 +4,18 @@ import CryptoKit
 public struct RouteCheck: Codable, Equatable {
     public var url: String
     public var requiredGroup: String
-    public var allowedFinalPolicies: [String]
+    public var allowedFinalPolicies: [String]?
 
-    public init(url: String, requiredGroup: String, allowedFinalPolicies: [String]) {
+    public init(url: String, requiredGroup: String, allowedFinalPolicies: [String]? = nil) {
         self.url = url
         self.requiredGroup = requiredGroup
         self.allowedFinalPolicies = allowedFinalPolicies
+    }
+
+    public func allowsFinalPolicy(_ policy: String?) -> Bool {
+        guard let policy, !policy.isEmpty,
+              !["DIRECT", "REJECT", "REJECT-DROP", "REJECT-TINYGIF"].contains(policy.uppercased()) else { return false }
+        return allowedFinalPolicies?.contains(policy) ?? true
     }
 }
 
@@ -39,11 +45,14 @@ public struct Configuration: Codable, Equatable {
                   ["https", "http"].contains(url.scheme), url.host?.isEmpty == false,
                   url.user == nil, url.password == nil, url.fragment == nil,
                   check.url.count <= 2048, urls.insert(check.url).inserted,
-                  validName(check.requiredGroup), !check.allowedFinalPolicies.isEmpty,
-                  check.allowedFinalPolicies.count <= 128,
-                  Set(check.allowedFinalPolicies).count == check.allowedFinalPolicies.count,
-                  check.allowedFinalPolicies.allSatisfy({ validName($0) && !["DIRECT", "REJECT", "REJECT-DROP", "REJECT-TINYGIF"].contains($0.uppercased()) }) else {
-                throw GuardError("Each route check needs a unique HTTP(S) URL without credentials, an exact group and nonempty proxy allowlist")
+                  validName(check.requiredGroup) else {
+                throw GuardError("Each route check needs a unique HTTP(S) URL without credentials and an exact group")
+            }
+            if let allowed = check.allowedFinalPolicies {
+                guard !allowed.isEmpty, allowed.count <= 128, Set(allowed).count == allowed.count,
+                      allowed.allSatisfy({ validName($0) && check.allowsFinalPolicy($0) }) else {
+                    throw GuardError("Optional allowed_final_policies must contain unique nonempty proxy names; omit it for group-only matching")
+                }
             }
         }
     }
@@ -58,7 +67,11 @@ public struct Configuration: Codable, Equatable {
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["version", "mode", "route_checks"],
               let routes = object["route_checks"] as? [[String: Any]],
-              routes.allSatisfy({ Set($0.keys) == ["url", "required_group", "allowed_final_policies"] }) else {
+              routes.allSatisfy({ route in
+                  let keys = Set(route.keys)
+                  return (keys == ["url", "required_group"] || keys == ["url", "required_group", "allowed_final_policies"]) &&
+                      (route["allowed_final_policies"] == nil || route["allowed_final_policies"] is [String])
+              }) else {
             throw GuardError("Invalid or unknown configuration fields")
         }
         let result = try JSON.decode(Configuration.self, from: data)
@@ -110,10 +123,9 @@ public struct RouteResult: Codable, Equatable {
               !group.isEmpty, !final.isEmpty, !type.isEmpty else {
             throw GuardError("Surge returned an incomplete rule explanation")
         }
-        let proxy = !["DIRECT", "REJECT", "REJECT-DROP", "REJECT-TINYGIF"].contains(final.uppercased()) &&
-            !["direct", "reject", "reject-drop", "reject-tinygif"].contains(type.lowercased())
+        let proxy = !["direct", "reject", "reject-drop", "reject-tinygif"].contains(type.lowercased())
         let groupMatches = group == check.requiredGroup && steps.contains { $0["group"] as? String == check.requiredGroup }
-        let ready = groupMatches && proxy && check.allowedFinalPolicies.contains(final)
+        let ready = groupMatches && proxy && check.allowsFinalPolicy(final)
         return RouteResult(url: check.url, expectedGroup: check.requiredGroup, actualGroup: group,
                            finalPolicy: final, ready: ready,
                            reason: ready ? "route_matched" : "route_policy_mismatch")

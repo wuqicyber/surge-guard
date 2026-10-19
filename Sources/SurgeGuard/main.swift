@@ -96,7 +96,7 @@ final class Daemon {
                 case .success(let observation):
                     let bound = observation.routes.count == config.routeChecks.count && zip(observation.routes, config.routeChecks).allSatisfy {
                         $0.url == $1.url && $0.expectedGroup == $1.requiredGroup &&
-                            (!$0.ready || ($0.actualGroup == $1.requiredGroup && $1.allowedFinalPolicies.contains($0.finalPolicy ?? "")))
+                            (!$0.ready || ($0.actualGroup == $1.requiredGroup && $1.allowsFinalPolicy($0.finalPolicy)))
                     }
                     self.session = bound ? observation : nil
                     self.sessionFailure = bound ? "" : "rule_probe_configuration_changed"
