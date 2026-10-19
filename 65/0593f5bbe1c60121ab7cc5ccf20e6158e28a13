@@ -1,0 +1,47 @@
+Sources/SurgeGuardCore/LogReader.swift
+  s_d1ba28721726a9::t_4d1dc89d5ad40a 20-31,95-101
+Tests/SurgeGuardTests/main.swift
+  s_d1ba28721726a9::t_5ecadc0fed5c6e 104-106,158-178,184,194,344-352
+integrations/swiftbar/surge-guard-action.sh
+  s_1aab1634823991::t_9e44281a0afe5c 17-34,50,52-62
+AGENTS.md
+  s_feb680f5d77ef5::t_2715a9c4a9f4bb 54-56
+docs/incidents/update-lock-race.md
+  s_feb680f5d77ef5::t_33aa06c4e6d7ed 44-52
+docs/troubleshooting.md
+  s_feb680f5d77ef5::t_4769de6d3fd423 20-23,52
+docs/verification.md
+  s_feb680f5d77ef5::t_24c69131d21737 259-296
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "650593f5bbe1c60121ab7cc5ccf20e6158e28a13",
+  "prompts": {},
+  "sessions": {
+    "s_1aab1634823991": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50870fb2-78c2-4dff-b971-715aef6f3a0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_d1ba28721726a9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6497df62-940e-486e-9426-4f023662bc66",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
