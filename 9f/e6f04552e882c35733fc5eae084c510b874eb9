@@ -1,0 +1,51 @@
+Sources/SurgeGuard/CLI.swift
+  s_1aab1634823991::t_9b202de6dbb06c 12,102-103,121-133
+Sources/SurgeGuard/main.swift
+  s_1aab1634823991::t_77be580b8efe6b 17,32-36,62,131,195-199,215-269,288-291
+Sources/SurgeGuardCore/EgressObservation.swift
+  s_1aab1634823991::t_5ccd57fe67a34c 1-178
+Tests/SurgeGuardTests/main.swift
+  s_1aab1634823991::t_b00591f8004066 17-77
+docs/acceptance.md
+  s_1aab1634823991::t_d7548e16126281 83-95
+docs/verification.md
+  s_feb680f5d77ef5::t_4b4c6ac52cb33c 297-333
+AGENTS.md
+  s_feb680f5d77ef5::t_15dab5acb2e880 59-63
+README.md
+  s_feb680f5d77ef5::t_0b09de74d30614 299,365-392
+README.zh-CN.md
+  s_feb680f5d77ef5::t_7da8e67632b8f7 14-24
+Sources/SurgeGuard/SwiftBar.swift
+  s_feb680f5d77ef5::t_6ac7935616fc9e 53
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_feb680f5d77ef5::t_f805daddb5a5e1 114-116,118-119
+Sources/SurgeGuardCore/LogReader.swift
+  s_feb680f5d77ef5::t_209c61c1ad74a2 72-74,81-83,86,114-132,138-140
+docs/troubleshooting.md
+  s_feb680f5d77ef5::t_7f03c60f361dd3 50-51,88-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "9fe6f04552e882c35733fc5eae084c510b874eb9",
+  "prompts": {},
+  "sessions": {
+    "s_1aab1634823991": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50870fb2-78c2-4dff-b971-715aef6f3a0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
