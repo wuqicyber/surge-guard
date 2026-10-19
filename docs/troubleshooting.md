@@ -47,6 +47,8 @@ Never make the private directory world-readable to simplify menu access.
 | Group-only JSON becomes `configuration_invalid` on an older installation | Installed binary version versus new build | Preserve the old policy while installing the new binary; verify status, then apply the group-only policy. Empty/null allowlists are invalid, not an alternative spelling for omission. |
 | `pf_unverified` | Root doctor, first-anchor ordering, competing PF users | Resolve the reported PF error. Protection is unknown when PF cannot be programmed. Never flush all PF rules/state as a shortcut. |
 | Enhanced mode unavailable | Signature/extension/VIF/default-route/IPv6 fields | Start Enhanced Mode, inspect competing VPNs/routes and rerun the condition probe. |
+| `egress_path_observed` | Process/PID, interface, destination scope, process kind and new byte counts | Inspect public application activity separately from system-extension transport and LAN discovery. A DIRECT decision forwarded by Surge is not a bypass. Network extensions are classified, not implicitly approved. |
+| `egress_observation_failed` | Fixed `nettop` command timeout/output and parser error | Observation is unavailable; PF readiness continues unchanged. Do not interpret the missing evidence as no bypass. Check `observe-egress --json`, using sudo when full process visibility is needed. |
 | Menu has two Surge sections | Existing combined plugin and standalone plugin | Use `install-user.sh --menu-only`, remove the standalone copy and call the renderer once from the combined menu. |
 | Parent menu turns grey after a status change on SwiftBar 2.1.1 | Current isolated renderer and the installed user renderer version | Refresh the updated renderer. Parent entries carry primary light/dark colors to preserve SwiftBar's action during incremental submenu updates; changing PF or restarting the guard is unnecessary. |
 | Emergency action reports it cannot inspect the guard service/PID | launchctl query error, authentication and expected job state | Restore query access and retry. It deliberately refuses to clear rules when absence/exit cannot be established. Only the specific missing-service result is absence; the action and log readers do not invoke the guard binary for help. |
@@ -82,6 +84,23 @@ Do not run ordered-shutdown tests on an unsaved working session. Unit tests do
 not send app quit events or request OS shutdown.
 
 ## Diagnostics and public issues
+
+Use SwiftBar's read-only egress sample or `surge-guard observe-egress --json`.
+The daemon samples about one second every 30 seconds after the new system binary
+is installed. Evidence uses only the second delta frame; old connection totals,
+idle sockets, loopback and verified Surge-owned traffic are not reported as new
+off-VIF activity. Other interfaces include physical Wi-Fi/Ethernet and other
+tunnels. Unknown UDP peers are retained with their uncertainty, and absent
+counters/interfaces appear in summaries. A five-minute summary is an observer
+heartbeat, not an all-clear. Twenty new flows per sample and five-minute dedup
+bound evidence volume in addition to the existing current/previous log rotation.
+
+These records cannot reconstruct activity before observation was installed or
+all short-lived traffic between samples. Gate state logs answer when conditions
+and PF checks changed, not which individual packets escaped. A Surge-exit timing
+field measures callback receipt to PF verification; command/scheduling latency
+and the 0.5-second fallback rule out a guaranteed tens-of-milliseconds deadline.
+Keep endpoint/process evidence private when sharing reports.
 
 Share a small sanitized summary: component version, macOS/Surge versions,
 configuration mode, state, reason/event codes and which acceptance scenario

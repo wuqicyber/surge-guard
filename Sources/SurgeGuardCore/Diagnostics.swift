@@ -111,9 +111,12 @@ public struct StatusReport: Codable {
 
 public enum EventLog {
     public static func write(_ event: String, level: String = "info", message: String, details: [String: Any] = [:]) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = formatter.string(from: Date())
         let record: [String: Any] = ["time": timestamp, "component": "SurgeGuard", "level": level, "event": event,
-                                     "pid": getpid(), "boot_id": SystemClock.bootID, "message": message, "details": details]
+                                     "pid": getpid(), "boot_id": SystemClock.bootID, "monotonic_uptime": SystemClock.seconds,
+                                     "message": message, "details": details]
         guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .withoutEscapingSlashes]) else { return }
         let line = String(decoding: data, as: UTF8.self) + "\n"
         NSLog("surge-guard: %@", line)

@@ -69,17 +69,21 @@ public enum LogReader {
                       "gate_state": "应用门禁状态变化", "gate_ready": "应用门禁已就绪",
                       "gate_restore_progress": "正在恢复应用", "gate_waiting": "等待系统门禁放行",
                       "gate_status_unavailable": "系统门禁状态暂不可读", "gate_status_recovered": "系统门禁状态读取已恢复",
-                      "gate_error": "应用门禁异常",
+                      "gate_error": "应用门禁异常", "egress_path_observed": "观察到其他接口上的网络活动",
+                      "egress_observation_failed": "出口观测暂不可用", "egress_observation_recovered": "出口观测已恢复",
+                      "egress_observation_summary": "出口观测摘要",
                       "application_restore_failed": "应用启动失败，保留待重试", "shutdown_started": "开始有序退出",
                       "shutdown_aborted": "关机已中止，会话已保留", "shutdown_requested": "已请求系统关机",
                       "legacy_migrated": "旧配置已迁移", "migration_app_unresolved": "旧应用名称需要补全 Bundle ID"]
         let title = unavailable ? "系统门禁状态暂不可读" : legacyProgress.map { $0 == 0 ? "应用门禁已就绪" : "正在恢复应用" } ??
             (event == "gate_changed" ? (message == "allowed" ? "ALLOWED / 已放行" : "BLOCKED / 已阻断") : titles[event] ?? event)
         var timestamp = record["time"] as? String ?? "—"
-        if let date = ISO8601DateFormatter().date(from: timestamp) {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: timestamp) ?? ISO8601DateFormatter().date(from: timestamp) {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss XXXXX"
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS XXXXX"
             timestamp = formatter.string(from: date)
         }
         let level = unavailable ? "WARNING" : (record["level"] as? String ?? "info").uppercased()
@@ -107,11 +111,33 @@ public enum LogReader {
             lines.append("  结果：沿用正在运行的应用，本次没有发送启动请求")
         } else if event == "application_restored" {
             lines.append(record["component"] == nil ? "  结果：应用恢复步骤已完成（旧版事件不能区分原本已运行的应用）" : "  结果：已完成应用启动请求")
+        } else if event == "egress_path_observed" {
+            lines.append("  证据：采样期间有 socket 字节计数增长，接口不是 Surge VIF")
+            lines.append("  影响：普通应用公网直出需排查；独立网络、局域网和目标未知流量分别判断")
+            lines.append("  处理：核对进程、接口和其他 VPN；本事件不会修改防火墙或自动断网")
+            for flow in details["flows"] as? [[String: Any]] ?? [] {
+                let kinds = ["system_extension": "系统扩展", "application_or_service": "应用/服务", "unresolved": "身份待确认"]
+                let scopes = ["public": "公网", "local_or_reserved": "局域网/保留地址", "unresolved": "目标未知"]
+                lines.append("  \(text(flow["process"]))（PID \(text(flow["pid"]))） · \(kinds[flow["process_kind"] as? String ?? ""] ?? "身份待确认") · \(scopes[flow["destination_scope"] as? String ?? ""] ?? "目标未知")")
+                lines.append("    接口：\(text(flow["interface"]))  协议：\(text(flow["transport"]))  目标：\(text(flow["remote_endpoint"]))")
+                lines.append("    本次采样发送：\(text(flow["sent_bytes"])) 字节  接收：\(text(flow["received_bytes"])) 字节")
+            }
+        } else if event == "egress_observation_failed" {
+            lines.append("  原因：\(text(message))")
+            lines.append("  影响：这段时间缺少出口观测证据；现有防火墙判断继续运行")
+        } else if event == "egress_observation_summary" {
+            lines.append("  状态：后台每 \(text(details["sample_interval_seconds"])) 秒采样 \(text(details["sample_seconds"])) 秒")
+            lines.append("  本次其他出口活动：\(text(details["observed_flows"])) 条；目标未解析的活动 socket：\(text(details["unresolved_active_sockets"])) 个")
+            lines.append("  覆盖缺口：接口未知 \(text(details["unattributed_active_sockets"])) 个；无字节计数 \(text(details["unmeasured_sockets"])) 个")
+            lines.append("  范围：TCP / UDP 接口活动，未知 UDP 目标单列；未发现记录不代表确认无绕过")
         } else if event == "gate_changed" {
             lines.append(message == "allowed" ? "  状态：普通联网已放行，配置条件与 PF 检查通过" : "  状态：普通联网已阻断，条件通过后自动恢复")
             if message != "allowed" { lines.append("  原因：\(reason(message))") }
         } else if !message.isEmpty && message != "allowed" { lines.append("  说明：\(reason(message))") }
         if let pending { lines.append("  恢复进度：剩余 \(pending) 个应用") }
+        if let elapsed = details["exit_event_to_block_verified_ms"] as? Double {
+            lines.append("  Surge 退出事件收到至 PF 阻断验证：\(String(format: "%.1f", elapsed)) 毫秒（不是实际退出至逐包阻断延迟）")
+        }
         if let routes = details["routes"] as? [[String: Any]] {
             for route in routes {
                 lines.append("  \((route["ready"] as? Bool) == true ? "✓" : "✗") \(text(route["url"]))")

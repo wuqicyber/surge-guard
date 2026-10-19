@@ -294,3 +294,40 @@ Private root PF/log inspection was unavailable without an interactive sudo
 credential. The read-only daemon report supplies recent root-owned PF audit
 results. Deliberate failure/traffic blocking, real emergency unlock, automatic
 rollback, sleep, power loss and OS shutdown acceptance remain unperformed.
+
+## Passive egress evidence and exit-event timing — 2026-10-19
+
+- Inspected the guard's own events mirrored to the macOS unified log. A Surge
+  update recorded unavailable extension/service readiness as blocked, followed by
+  allowed only after the configured routing check passed. The inspected window
+  contains no PF-unverified, reconciliation-failed or manual-unlock event. These
+  state events cannot reconstruct individual historical flows or actual exit-to-
+  packet-block latency. Repeated pending/blocked/allowed cycles were also seen;
+  their underlying notification behavior is unchanged by this logging update.
+- Added asynchronous fixed-system-command socket sampling, new-byte evidence,
+  public/local/unknown destination classification, root-owned system-extension
+  classification, bounded per-flow dedup and sample summaries. Neither evidence
+  nor observation failure participates in the PF readiness decision. Millisecond
+  event time, monotonic uptime and callback-to-verified-block timing preserve
+  future diagnostic evidence without promising a fixed blocking deadline.
+- All 31 standalone groups, both warnings-as-errors release builds and shell
+  checks pass. Focused fixtures cover lifetime versus delta frames, quoted process
+  names, IPv4 and both IPv6 endpoint formats, local/unknown/idle sockets, absent
+  counters/interfaces, reused UDP tuples, malformed output, dedup/batch limits,
+  machine JSON and human evidence/timing formatting. A real read-only sample
+  exposed normal empty nettop counters; the fixture and parser now cover them.
+- Ran the new release and installed user-renderer samples without external test
+  requests. Both parse the real output, expose visibility gaps and distinguish
+  independently running system-extension traffic from application candidates.
+  Samples did not identify public application egress outside Surge during those
+  intervals; they are not an exhaustive historical or packet-level audit.
+- Updated the user renderer/recovery components using recovery-only installation,
+  retaining its backup. The isolated combined-section output has the new manual
+  egress action and both recovery entries. Refreshed SwiftBar without restarting
+  either service. Existing private plugin content was not executed or published.
+
+The system daemon has not been replaced during this phase: non-interactive sudo
+is unavailable and interactive administrator verification was not completed.
+Background observer persistence, root process visibility, exit-event timing,
+controlled bypass/traffic blocking and restart/rollback/power scenarios remain
+unperformed. Installing only the user renderer does not enable background logs.

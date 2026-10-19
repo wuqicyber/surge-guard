@@ -80,6 +80,19 @@ and confirm only one companion LaunchAgent runs. Do not publish the legacy data.
 
 Do not claim that `SIGKILL` of the guard while allowed remains closed: this is a documented limitation. If intentionally testing it, record the open interval and verify launchd recovery. Likewise, boot-time traffic before PF/service activation is not covered by the guarantee.
 
+## Egress observation
+
+For egress logging acceptance, use the read-only `observe-egress --json` command
+first. With separately authorized traffic to a controlled endpoint, confirm a
+non-Surge interface's byte increments are recorded with process/PID and scope;
+normal Surge-owned egress and loopback are excluded. Check system-extension and
+LAN/unknown-UDP classifications without treating them as implicitly approved.
+Confirm repeated connections are deduplicated, a summary appears within five
+minutes, and command failure/recovery does not change PF or gate policy. Do not
+generate a bypass or bind a physical interface on an unsaved production session
+merely to pass this test. Packet captures and process-exit timing acceptance
+remain separate from parser/unit tests and a successful background sample.
+
 ## PF coexistence
 
 Capture root `pfctl -sr`, relevant nested anchors and PF references before installation. Confirm the guard attaches first, normal updates change only its anchor, and unlock releases only its own reference. Verify Internet Sharing, VM networking and other PF users if they are part of your setup. The initial main-ruleset reload deserves separate review.
