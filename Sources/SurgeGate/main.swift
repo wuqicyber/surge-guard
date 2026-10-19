@@ -68,11 +68,12 @@ func publish(_ state: String, _ message: String, pending: [String]) throws {
     try UserPaths.write(try JSON.encode(GateStatus(state: state, message: message, pending: pending)), to: UserPaths.status)
 }
 
-func lock(_ name: String) throws -> Int32 {
+func lock(_ name: String, timeout: TimeInterval = 0) throws -> Int32 {
     try UserPaths.prepare()
     let fd = open(UserPaths.directory + "/" + name, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard fd >= 0 else { throw GuardError("Cannot open gate lock") }
-    guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { close(fd); throw GuardError("SurgeGate already owns this operation") }
+    do { try RuntimeLock.acquire(fd, timeout: timeout) }
+    catch { close(fd); throw GuardError("SurgeGate lock \(name): \(error)") }
     return fd
 }
 
@@ -249,6 +250,14 @@ func install() throws {
         try UserPaths.write(try JSON.encode(GateConfiguration.standard, pretty: true), to: UserPaths.config)
     }
     _ = try GateConfiguration.load()
+    let source = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
+    try UserPaths.prepare(UserPaths.directory + "/bin")
+    let staged = UserPaths.binary + ".new." + UUID().uuidString
+    defer { try? FileManager.default.removeItem(atPath: staged) }
+    if source != UserPaths.binary {
+        try FileManager.default.copyItem(atPath: source, toPath: staged)
+        guard chmod(staged, 0o700) == 0 else { throw GuardError("Cannot protect staged user binary") }
+    }
     let domain = "gui/\(getuid())"
     for label in [UserPaths.label, "com.user.surgegate"] {
         if try Command.run("/bin/launchctl", ["print", "\(domain)/\(label)"]).status == 0 {
@@ -260,14 +269,12 @@ func install() throws {
         let backup = FileManager.default.fileExists(atPath: oldPlist + ".migrated-backup") ? oldPlist + ".migrated-backup." + UUID().uuidString : oldPlist + ".migrated-backup"
         try FileManager.default.moveItem(atPath: oldPlist, toPath: backup)
     }
-    let source = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
-    let bin = UserPaths.directory + "/bin"
-    try FileManager.default.createDirectory(atPath: bin, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-    if source != UserPaths.binary {
-        let staged = UserPaths.binary + ".new"
-        if FileManager.default.fileExists(atPath: staged) { try FileManager.default.removeItem(atPath: staged) }
-        try FileManager.default.copyItem(atPath: source, toPath: staged)
-        guard chmod(staged, 0o700) == 0, rename(staged, UserPaths.binary) == 0 else { throw GuardError("Cannot install user binary") }
+    do {
+        let fd = try lock("gate.lock", timeout: 10)
+        defer { close(fd) }
+        if source != UserPaths.binary {
+            guard rename(staged, UserPaths.binary) == 0 else { throw GuardError("Cannot install user binary") }
+        }
     }
     let agents = URL(fileURLWithPath: UserPaths.plist).deletingLastPathComponent()
     try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)

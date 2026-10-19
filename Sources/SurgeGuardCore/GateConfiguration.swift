@@ -11,12 +11,12 @@ public enum UserPaths {
     public static let label = "io.github.surge-guard.gate"
     public static var plist: String { FileManager.default.homeDirectoryForCurrentUser.path + "/Library/LaunchAgents/" + label + ".plist" }
 
-    public static func prepare() throws {
+    public static func prepare(_ path: String = directory) throws {
         guard geteuid() != 0 else { throw GuardError("SurgeGate must run as a normal user") }
-        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true,
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
         var info = stat()
-        guard lstat(directory, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFDIR,
+        guard lstat(path, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFDIR,
               info.st_mode & 0o022 == 0 else { throw GuardError("Unsafe user state directory") }
     }
 

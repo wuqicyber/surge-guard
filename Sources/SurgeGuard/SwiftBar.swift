@@ -15,7 +15,9 @@ enum SwiftBar {
         let icon = state == "allowed" ? "🟢" : state == "blocked" ? "🔴" : "🟠"
         let title = !modern && status.daemonRunning ? "旧版运行 · PF 待验证" : ["allowed": "PF 已验证放行", "blocked": "PF 已验证阻断", "stopped": "守护已停止", "unknown": "状态未知", "unlocked": "已手动解除"][state] ?? "状态未知"
         var lines = sectionOnly ? [] : ["\(icon) | size=13", "---"]
-        lines.append("Surge Guard · \(icon) \(title)")
+        // SwiftBar 2.1.1 clears submenu actions during live updates; a color preserves the action.
+        let parentStyle = " | color=#1F2937,#F2F2F7"
+        lines.append("Surge Guard · \(icon) \(title)" + parentStyle)
         if let snapshot = status.snapshot {
             let current = status.firewallVerified
             lines.append("-- 配置：\(snapshot.configurationMode == "routes" ? "增强模式 + 分流检查" : "增强模式")")
@@ -48,7 +50,7 @@ enum SwiftBar {
         command("编辑规则草稿", ["edit-config"])
         if modern { command("验证并应用规则草稿", ["configure", CLI.draft], root: true) }
         else { lines.append("-- 当前为旧版系统守护：分流门禁及备份命令尚未启用 | color=#92400E,#FCD34D size=12") }
-        lines.append("-- 恢复与备份（离线可用）")
+        lines.append("-- 恢复与备份（离线可用）" + parentStyle)
         command("重启守护并等待验证（连接可能重建）", ["restart"], root: true, depth: "----")
         command("启动守护 / 恢复保护", ["start"], root: true, depth: "----")
         if modern {
@@ -68,7 +70,7 @@ enum SwiftBar {
         }
         if FileManager.default.isExecutableFile(atPath: CLI.gateBinary) {
             let gateStatus = (try? Command.checked(CLI.gateBinary, ["status"], timeout: 3)) ?? "SurgeGate 状态不可用"
-            lines.append("SurgeGate · \(clean(gateStatus))")
+            lines.append("SurgeGate · \(clean(gateStatus))" + parentStyle)
             for (title, args) in [("查看 SurgeGate 日志", ["logs"]), ("重启 SurgeGate", ["restart"]), ("编辑应用配置", ["edit-config"]), ("有序重启系统", ["shutdown", "--action", "restart"]), ("有序关机", ["shutdown", "--action", "shutdown"])] {
                 lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) " + args.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true")
             }

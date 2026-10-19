@@ -34,6 +34,7 @@ Never make the private directory world-readable to simplify menu access.
 | `pf_unverified` | Root doctor, first-anchor ordering, competing PF users | Resolve the reported PF error. Protection is unknown when PF cannot be programmed. Never flush all PF rules/state as a shortcut. |
 | Enhanced mode unavailable | Signature/extension/VIF/default-route/IPv6 fields | Start Enhanced Mode, inspect competing VPNs/routes and rerun the condition probe. |
 | Menu has two Surge sections | Existing combined plugin and standalone plugin | Use `install-user.sh --menu-only`, remove the standalone copy and call the renderer once from the combined menu. |
+| Parent menu turns grey after a status change on SwiftBar 2.1.1 | Current isolated renderer and the installed user renderer version | Refresh the updated renderer. Parent entries carry primary light/dark colors to preserve SwiftBar's action during incremental submenu updates; changing PF or restarting the guard is unnecessary. |
 
 ## SurgeGate
 

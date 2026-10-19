@@ -27,6 +27,22 @@ do {
         flock(second, LOCK_UN)
     }
     print("PASS: delayed daemon lock release waits successfully; occupied lock times out")
+    let directoryFixture = FileManager.default.temporaryDirectory.appendingPathComponent("surge-gate-directory-test-" + UUID().uuidString)
+    do {
+        defer { try? FileManager.default.removeItem(at: directoryFixture) }
+        try UserPaths.prepare(directoryFixture.path)
+        try UserPaths.prepare(directoryFixture.path)
+        let bin = directoryFixture.appendingPathComponent("bin").path
+        try UserPaths.prepare(bin)
+        try UserPaths.prepare(bin)
+        let regularFile = directoryFixture.appendingPathComponent("regular").path
+        try "".write(toFile: regularFile, atomically: true, encoding: .utf8)
+        try rejects { try UserPaths.prepare(regularFile) }
+        let link = directoryFixture.appendingPathComponent("link").path
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: bin)
+        try rejects { try UserPaths.prepare(link) }
+    }
+    print("PASS: user installer accepts existing bin directories and rejects files/symlinks")
     let backup = try BackupManifest(kind: "update")
     try JSON.decode(BackupManifest.self, from: Data(JSON.encode(backup).utf8)).validate()
     var invalidBackup = try JSONSerialization.jsonObject(with: Data(JSON.encode(backup).utf8)) as! [String: Any]

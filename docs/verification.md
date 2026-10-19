@@ -116,3 +116,42 @@ live emergency removal or restart, native companion migration, actual shutdown,
 power-loss/sleep recovery or full light/dark visual interaction. The system
 daemon and PF were not changed during this repair. Native UI inspection timed
 out; rendered output and the supplied screenshot do not replace full visual QA.
+
+## Successful system update and user migration — 2026-10-19
+
+- The operator ran the fixed system installer locally. Its output records a
+  verified query preflight, an update backup, startup with a new PID and
+  `Verified: ALLOWED`. Subsequent read-only snapshots are fresh, in `routes`
+  mode, with all Enhanced Mode and configured routing checks passing. The
+  installed executable matched the release build from the recovery commit.
+  This exercises a successful handoff; automatic rollback was not triggered.
+- Installed the native user companion and migrated existing configuration.
+  The first user installation exposed an existing-directory error because the
+  offline recovery component had already created `bin`. Fixed directory setup
+  to accept an existing safe directory, reject files/symlinks, stage the binary
+  before stopping the service and wait for its lock on replacement. Added a
+  focused directory regression check; the full check script passes.
+- The new user LaunchAgent publishes fresh `ready` with zero pending apps.
+  The old LaunchAgent is unloaded and its plist retained as a migration backup.
+  Existing app priority names were converted to bundle IDs where resolvable;
+  non-application/unknown legacy entries are logged and originals retained.
+  The two existing local shutdown/restart command callers now invoke the native
+  companion. Neither shutdown caller was executed.
+- Repeated the user installer with its native service already running. It
+  replaced/reloaded the companion successfully; the new launchd PID published
+  fresh `ready`, zero pending apps and a nonempty session checkpoint. Existing
+  applications remained running. This does not exercise launching an absent app
+  or actual quit/shutdown behavior.
+- Verified the installed SwiftBar version is 2.1.1 (597), matching the latest
+  official stable release at inspection time. Its v2.1.1 menu updater clears
+  actionless submenu actions; explicit primary light/dark colors keep this
+  integration enabled. Added those colors to the guard, recovery and companion
+  parent entries and refreshed the existing combined menu. References:
+  [release](https://github.com/swiftbar/SwiftBar/releases/tag/v2.1.1),
+  [menu implementation](https://github.com/swiftbar/SwiftBar/blob/v2.1.1/SwiftBar/MenuBar/MenuBarItem.swift#L975-L983).
+
+Still unperformed: deliberate policy-failure/live traffic blocking, emergency
+unlock/backup restoration/automatic rollback acceptance, actual application
+quit/refusal and OS shutdown, power-loss/sleep recovery, and post-fix light/dark
+visual interaction. No Surge toggles, system guard restart or PF changes were
+issued by the agent during the user-companion migration.
