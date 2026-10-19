@@ -14,7 +14,12 @@ public enum LogReader {
                       "primary network service is not Surge": "主网络服务不属于 Surge",
                       "Surge VIF is not up with its expected IPv4 address": "Surge 虚拟网卡或地址未就绪",
                       "Surge does not own the IPv4 default route": "IPv4 默认路由未由 Surge 接管",
-                      "the global IPv6 route is not owned by Surge": "IPv6 主路由未由 Surge 接管"]
+                      "the global IPv6 route is not owned by Surge": "IPv6 主路由未由 Surge 接管",
+                      "surge_tunnel_disconnecting": "增强模式正在断开，提前阻断",
+                      "surge_tunnel_disconnected": "增强模式已断开",
+                      "surge_tunnel_connecting": "增强模式正在连接，保持阻断",
+                      "surge_tunnel_status_unknown": "增强模式连接状态未知",
+                      "surge_process_exited": "Surge 进程已退出"]
         return message.components(separatedBy: "; ").map { part in
             guard let key = labels.keys.first(where: { part == $0 || part.hasPrefix($0 + ":") }) else { return text(part) }
             if key == "rule_probe_failed" {
@@ -69,7 +74,8 @@ public enum LogReader {
                       "gate_state": "应用门禁状态变化", "gate_ready": "应用门禁已就绪",
                       "gate_restore_progress": "正在恢复应用", "gate_waiting": "等待系统门禁放行",
                       "gate_status_unavailable": "系统门禁状态暂不可读", "gate_status_recovered": "系统门禁状态读取已恢复",
-                      "gate_error": "应用门禁异常", "egress_path_observed": "socket 采样记录（实际路径未验证）",
+                      "gate_error": "应用门禁异常", "readiness_loss_blocked": "接管失效，优先阻断已验证",
+                      "egress_path_observed": "socket 采样记录（实际路径未验证）",
                       "egress_observation_failed": "出口观测暂不可用", "egress_observation_recovered": "出口观测已恢复",
                       "egress_observation_summary": "出口观测摘要",
                       "application_restore_failed": "应用启动失败，保留待重试", "shutdown_started": "开始有序退出",
@@ -111,6 +117,16 @@ public enum LogReader {
             lines.append("  结果：沿用正在运行的应用，本次没有发送启动请求")
         } else if event == "application_restored" {
             lines.append(record["component"] == nil ? "  结果：应用恢复步骤已完成（旧版事件不能区分原本已运行的应用）" : "  结果：已完成应用启动请求")
+        } else if event == "readiness_loss_blocked" {
+            lines.append("  原因：\(reason(message))")
+            lines.append("  结果：阻断规则与旧连接状态清理已完成；后续条件检查仍在阻断下进行")
+            if let elapsed = details["event_to_rules_loaded_ms"] as? Double {
+                lines.append("  收到失效事件 / 本次发现失效 → 阻断规则加载完成：\(String(format: "%.1f", elapsed)) 毫秒")
+            }
+            if let elapsed = details["event_to_block_verified_ms"] as? Double {
+                lines.append("  收到失效事件 / 本次发现失效 → 阻断验证及旧状态清理完成：\(String(format: "%.1f", elapsed)) 毫秒")
+            }
+            lines.append("  范围：这是守护处理耗时；未测量实际断开至事件收到的时间，也未验证逐包零绕过")
         } else if event == "egress_path_observed" {
             lines.append("  观测：nettop 报告以下 socket 的字节计数增加；接口字段是工具报告值")
             lines.append("  结论：未验证数据包实际路径，不能据此确认绕过或确认全部经 Surge")

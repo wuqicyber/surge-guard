@@ -15,6 +15,8 @@ final class Daemon {
     var trustedSurgePID: pid_t?
     var surgeExitSource: DispatchSourceProcess?
     var surgeExitDetectedAt: Double?
+    var surgeConnection: SCNetworkConnection?
+    var surgeConnectionService: String?
     var nextSurgeSearch: Double = 0
     var nextFirewallAudit: Double = 0
     let runID = UUID().uuidString
@@ -64,7 +66,7 @@ final class Daemon {
             self.surgeExitSource?.cancel()
             self.surgeExitSource = nil
             self.nextSurgeSearch = 0
-            self.reconcile(forceFirewallAudit: true)
+            self.reconcile(forceFirewallAudit: true, lossReason: "surge_process_exited", detectedAt: self.surgeExitDetectedAt)
         }
         trustedSurgePID = pid
         surgeExitSource = exitSource
@@ -127,9 +129,60 @@ final class Daemon {
         }
     }
 
-    func reconcile(forceFirewallAudit: Bool = false) {
+    func watchSurgeConnection() throws -> String? {
+        guard let store else { throw GuardError("Network state subscription is unavailable") }
+        let primary = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any] ?? [:]
+        guard let service = primary["PrimaryService"] as? String, Probe.isSurgeService(service, store: store) else {
+            return "primary network service is not Surge"
+        }
+        if surgeConnectionService != service {
+            var context = SCNetworkConnectionContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+                                                     retain: nil, release: nil, copyDescription: nil)
+            guard let connection = SCNetworkConnectionCreateWithServiceID(nil, service as CFString, { connection, status, info in
+                guard let info else { return }
+                let daemon = Unmanaged<Daemon>.fromOpaque(info).takeUnretainedValue()
+                guard let current = daemon.surgeConnection, CFEqual(current, connection) else { return }
+                let received = SystemClock.seconds
+                daemon.reconcile(forceFirewallAudit: true, lossReason: Probe.connectionLossReason(status), detectedAt: received)
+            }, &context), SCNetworkConnectionSetDispatchQueue(connection, .main) else {
+                throw GuardError("Cannot subscribe to Surge tunnel state changes")
+            }
+            if let previous = surgeConnection, !SCNetworkConnectionSetDispatchQueue(previous, nil) {
+                throw GuardError("Cannot replace the previous Surge tunnel subscription")
+            }
+            surgeConnection = connection
+            surgeConnectionService = service
+        }
+        guard let connection = surgeConnection else { throw GuardError("Surge tunnel subscription is unavailable") }
+        return Probe.connectionLossReason(SCNetworkConnectionGetStatus(connection))
+    }
+
+    func reconcile(forceFirewallAudit: Bool = false, lossReason: String? = nil, detectedAt: Double? = nil) {
         defer { surgeExitDetectedAt = nil }
         do {
+            let received = detectedAt ?? SystemClock.seconds
+            let loss = try lossReason ?? watchSurgeConnection()
+            // Close before route/signature/configuration probes and PF integrity queries.
+            if allowed, let loss {
+                let timing = try firewall.block()
+                allowed = false
+                firewallVerified = timing.statesClearedUptime
+                generation += 1
+                session = nil
+                sessionChecked = 0
+                nextSessionProbe = 0
+                sessionFailure = "rule_probe_pending"
+                let snapshot = GuardSnapshot(runId: runID, firewallVerifiedUptime: firewallVerified, allowed: false,
+                                             configurationMode: configuration?.mode ?? "invalid", readiness: nil,
+                                             session: nil, reasons: [loss])
+                try RootFiles.write(try JSON.encode(snapshot), to: Paths.snapshot, mode: 0o644)
+                EventLog.write("readiness_loss_blocked", level: "warning", message: loss,
+                               details: ["run_id": runID, "detected_uptime": received, "pf": "blocked",
+                                         "block_rules_loaded_uptime": timing.rulesLoadedUptime,
+                                         "block_verified_uptime": timing.statesClearedUptime,
+                                         "event_to_rules_loaded_ms": max(0, (timing.rulesLoadedUptime - received) * 1000),
+                                         "event_to_block_verified_ms": max(0, (timing.statesClearedUptime - received) * 1000)])
+            }
             firewall.rememberAddresses()
             let now = SystemClock.seconds
             if forceFirewallAudit || now >= nextFirewallAudit {
@@ -146,6 +199,7 @@ final class Daemon {
             do { observation = try Probe.readiness(trustedProcess: surgeProcessTrusted()) }
             catch { observation = nil; probeFailure = String(describing: error) }
             var reasons = observation?.reasons ?? ["readiness_probe_failed: \(probeFailure ?? "unknown error")"]
+            if let loss, !reasons.contains(loss) { reasons.append(loss) }
             var config: Configuration?
             do {
                 config = try Configuration.load()

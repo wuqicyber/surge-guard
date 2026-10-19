@@ -1,6 +1,7 @@
 import Foundation
 import SurgeGuardCore
 import Darwin
+import SystemConfiguration
 
 // Standalone checks also work with Command Line Tools, where XCTest may not
 // be installed. Throw on failure so checks still work in optimized builds.
@@ -294,6 +295,22 @@ do {
         try check(state.reasons.isEmpty == (mask == 63), "Missing failure reason")
     }
     print("PASS: all 64 readiness combinations")
+
+    try check(Probe.connectionLossReason(.connected) == nil, "Connected tunnel was classified as a loss")
+    for (status, expected) in [(SCNetworkConnectionStatus.disconnecting, "surge_tunnel_disconnecting"),
+                               (.disconnected, "surge_tunnel_disconnected"), (.connecting, "surge_tunnel_connecting"),
+                               (.invalid, "surge_tunnel_status_unknown")] {
+        try check(Probe.connectionLossReason(status) == expected, "Non-connected tunnel could bypass loss blocking")
+    }
+    let lossRecord: [String: Any] = ["event": "readiness_loss_blocked", "message": "surge_tunnel_disconnecting",
+                                    "details": ["pf": "blocked", "event_to_rules_loaded_ms": 12.3, "event_to_block_verified_ms": 45.6]]
+    let lossLine = String(decoding: try JSONSerialization.data(withJSONObject: lossRecord), as: UTF8.self)
+    let lossHuman = LogReader.format(lossLine)
+    try check(lossHuman.contains("提前阻断") && lossHuman.contains("12.3 毫秒") && lossHuman.contains("45.6 毫秒") &&
+              lossHuman.contains("旧连接状态清理已完成") && lossHuman.contains("未验证逐包零绕过"),
+              "Loss log lost the blocking stages or overstated callback timing")
+    try check(LogReader.format(lossLine, json: true).contains("event_to_rules_loaded_ms"), "Loss timing JSON was discarded")
+    print("PASS: only connected tunnel status permits readiness; loss logs separate rule loading from state cleanup")
 
     let routeCheck = RouteCheck(url: "https://example.com", requiredGroup: "Residential", allowedFinalPolicies: ["Node A", "Node B"])
     let routeConfig = Configuration(version: 1, mode: "routes", routeChecks: [routeCheck])

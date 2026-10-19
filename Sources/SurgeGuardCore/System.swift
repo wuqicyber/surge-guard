@@ -200,6 +200,22 @@ public enum Probe {
         try trustedSurgePID() != nil
     }
 
+    public static func isSurgeService(_ service: String, store: SCDynamicStore) -> Bool {
+        guard !service.isEmpty,
+              let vpn = SCDynamicStoreCopyValue(store, "Setup:/Network/Service/\(service)/VPN" as CFString) as? [String: Any] else { return false }
+        return vpn["NEProviderBundleIdentifier"] as? String == "com.nssurge.surge-mac.ne"
+    }
+
+    public static func connectionLossReason(_ status: SCNetworkConnectionStatus) -> String? {
+        switch status {
+        case .connected: return nil
+        case .disconnecting: return "surge_tunnel_disconnecting"
+        case .disconnected: return "surge_tunnel_disconnected"
+        case .connecting: return "surge_tunnel_connecting"
+        default: return "surge_tunnel_status_unknown"
+        }
+    }
+
     public static func readiness(trustedProcess: Bool? = nil) throws -> Readiness {
         guard let store = SCDynamicStoreCreate(nil, "surge-guard.probe" as CFString, nil, nil) else {
             throw GuardError("Cannot open SystemConfiguration store")
@@ -213,8 +229,7 @@ public enum Probe {
         let interface = primary["PrimaryInterface"] as? String ?? ""
         let ipv6Interface = globalIPv6.isEmpty ? nil :
             (globalIPv6["PrimaryInterface"] as? String ?? "")
-        let vpn = dictionary("Setup:/Network/Service/\(service)/VPN")
-        let surgeService = vpn["NEProviderBundleIdentifier"] as? String == "com.nssurge.surge-mac.ne"
+        let surgeService = isSurgeService(service, store: store)
         let connection = surgeService ? SCNetworkConnectionCreateWithServiceID(nil, service as CFString, nil, nil) : nil
         let connected = connection.map { SCNetworkConnectionGetStatus($0) == .connected } ?? false
         let vifUp = interface.hasPrefix("utun") && addresses().contains {
