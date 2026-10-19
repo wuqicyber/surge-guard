@@ -17,6 +17,9 @@ enum CLI {
       sudo install                    Install/update; a running gate stays blocked during update
       sudo start                      Load the installed system service
       sudo restart                    Ask the service to block and restart normally
+      sudo backup                     Save installed binary, service and policy for recovery
+      sudo rollback                   Restore the last update backup and restart the service
+      sudo restore-policy             Restore the policy saved before the last configure
       sudo logs [--follow] [--json]    Readable recent events; optional follow or JSON Lines
       sudo unlock                     Stop and remove this gate; reboot/start re-arms it
       sudo uninstall                  Remove installed system components; retain configuration/logs
@@ -139,20 +142,32 @@ enum CLI {
             }
             try Command.checked("/usr/bin/open", ["-a", "TextEdit", draft])
         default:
-            guard ["install", "start", "restart", "run", "unlock", "uninstall", "configure", "logs"].contains(action) else {
+            guard ["install", "start", "restart", "backup", "rollback", "restore-policy", "run", "unlock", "uninstall", "configure", "logs"].contains(action) else {
                 throw GuardError("Unknown command: \(action)")
             }
             guard geteuid() == 0 else { throw GuardError("\(action) requires administrator privileges") }
+            let management = !["run", "logs"].contains(action) ? try RuntimeLock(management: true) : nil
+            defer { withExtendedLifetime(management) {} }
             switch action {
             case "install": try Admin.install()
-            case "start": try Admin.start()
+            case "start":
+                try Admin.start()
+                try Admin.waitForStatus()
             case "restart": try Admin.restart()
+            case "backup":
+                let saved = try Recovery.save(kind: "update")
+                print("Backup saved: \(Paths.backups)/\(saved.id)")
+            case "rollback": try Admin.restore(Recovery.latest("update"))
+            case "restore-policy":
+                try Recovery.restore(Recovery.latest("policy"))
+                print("Previous policy restored. Inspect status; the daemon reloads it automatically.")
             case "unlock": try Admin.unlock()
             case "uninstall": try Admin.uninstall()
             case "configure":
                 guard args.count == 2 else { throw GuardError("Usage: sudo configure FILE") }
                 let config = try Configuration.decode(Data(contentsOf: URL(fileURLWithPath: args[1])))
                 try RootFiles.preparePublicState()
+                try Recovery.save(kind: "policy")
                 try RootFiles.write(try JSON.encode(config, pretty: true), to: Paths.configuration, mode: 0o644)
                 EventLog.write("configuration_installed", message: "Policy validated and installed", details: ["mode": config.mode])
                 print("Policy installed. A running daemon reloads it automatically; inspect status.")

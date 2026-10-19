@@ -1,5 +1,6 @@
 import Foundation
 import SurgeGuardCore
+import Darwin
 
 // Standalone checks also work with Command Line Tools, where XCTest may not
 // be installed. Throw on failure so checks still work in optimized builds.
@@ -13,6 +14,98 @@ func rejects(_ operation: () throws -> Void) throws {
 }
 
 do {
+    let lockURL = FileManager.default.temporaryDirectory.appendingPathComponent("surge-guard-lock-test-" + UUID().uuidString)
+    do {
+        let first = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        let second = open(lockURL.path, O_RDWR)
+        guard first >= 0, second >= 0 else { throw GuardError("Cannot create lock fixture") }
+        defer { close(first); close(second); try? FileManager.default.removeItem(at: lockURL) }
+        try RuntimeLock.acquire(first, timeout: 0)
+        try rejects { try RuntimeLock.acquire(second, timeout: 0.06) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { flock(first, LOCK_UN) }
+        try RuntimeLock.acquire(second, timeout: 1)
+        flock(second, LOCK_UN)
+    }
+    print("PASS: delayed daemon lock release waits successfully; occupied lock times out")
+    let backup = try BackupManifest(kind: "update")
+    try JSON.decode(BackupManifest.self, from: Data(JSON.encode(backup).utf8)).validate()
+    var invalidBackup = try JSONSerialization.jsonObject(with: Data(JSON.encode(backup).utf8)) as! [String: Any]
+    for (field, value) in [("id", "../outside" as Any), ("kind", "unknown" as Any), ("files", ["/etc/pf.conf"] as Any)] {
+        var modified = invalidBackup; modified[field] = value
+        try rejects { try JSON.decode(BackupManifest.self, from: JSONSerialization.data(withJSONObject: modified)).validate() }
+    }
+    invalidBackup["files"] = []
+    try rejects { try JSON.decode(BackupManifest.self, from: JSONSerialization.data(withJSONObject: invalidBackup)).validate() }
+    print("PASS: recovery manifests reject path traversal, arbitrary destinations and incomplete backups")
+
+    let actionFixture = FileManager.default.temporaryDirectory.appendingPathComponent("surge-guard-menu-test-" + UUID().uuidString)
+    do {
+        try FileManager.default.createDirectory(at: actionFixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: actionFixture) }
+        let directory = actionFixture.path
+        let mock = directory + "/mock"
+        // The real script runs only against these fake tools; no sudo/PF/service mutation.
+        let mockScript = """
+        #!/bin/sh
+        kind=$1; shift
+        printf '%s %s\\n' "$kind" "$*" >> '\(directory)/calls'
+        case "$kind" in
+          id) echo 501 ;;
+          sudo) case "$1" in -v) exit 0 ;; -n) shift ;; esac; exec "$@" ;;
+          guard) case "$1" in --help) echo legacy ;; check) exit 0 ;; esac ;;
+          launchctl)
+            case "$1" in
+              print) if [ -f '\(directory)/stopped' ]; then exit 1; fi; if [ -f '\(directory)/restarted' ]; then echo 'pid = 5678'; else echo 'pid = 1234'; fi ;;
+              bootout) touch '\(directory)/stopped' ;;
+              kill) touch '\(directory)/restarted' ;;
+            esac ;;
+          kill)
+            if [ -f '\(directory)/stuck' ]; then exit 0; fi
+            if [ ! -f '\(directory)/exited' ]; then touch '\(directory)/exited'; exit 0; fi
+            exit 1 ;;
+          pfctl) exit 0 ;;
+          sleep) exit 0 ;;
+        esac
+        """
+        try mockScript.write(toFile: mock, atomically: true, encoding: .utf8)
+        chmod(mock, 0o700)
+        let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        var script = try String(contentsOf: project.appendingPathComponent("integrations/swiftbar/surge-guard-action.sh"))
+        script = script.replacingOccurrences(of: "guard_bin=/Library/PrivilegedHelperTools/surge-guard", with: "guard_bin='\(directory)/guard'")
+        for tool in ["launchctl", "kill", "sleep", "pfctl"] {
+            let original = tool == "pfctl" ? "/sbin/pfctl" : "/bin/" + tool
+            script = script.replacingOccurrences(of: original, with: "'\(directory)/\(tool)'")
+        }
+        script = script.replacingOccurrences(of: "sudo ", with: "'\(directory)/sudo' ")
+        script = script.replacingOccurrences(of: "$(id -u)", with: "$('\(directory)/id' -u)")
+        for tool in ["guard", "sudo", "launchctl", "kill", "sleep", "pfctl", "id"] {
+            let wrapper = "#!/bin/sh\nexec '\(mock)' \(tool) \"$@\"\n"
+            let path = directory + "/" + tool
+            try wrapper.write(toFile: path, atomically: true, encoding: .utf8); chmod(path, 0o700)
+        }
+        let testScript = directory + "/action.sh"
+        try script.write(toFile: testScript, atomically: true, encoding: .utf8)
+        let recovered = try Command.run("/bin/sh", [testScript, "unlock"], timeout: 10)
+        try check(recovered.status == 0 && recovered.output.contains("Protection is OFF"), "Offline recovery failed against legacy fixture: \(recovered.combined)")
+        let calls = try String(contentsOfFile: directory + "/calls")
+        try check(calls.range(of: "kill -0")!.lowerBound < calls.range(of: "pfctl -a io.github.surge-guard -F rules")!.lowerBound, "Rules cleared before daemon exit check")
+        try FileManager.default.removeItem(atPath: directory + "/stopped")
+        let restarted = try Command.run("/bin/sh", [testScript, "restart"], timeout: 10)
+        try check(restarted.status == 0 && restarted.output.contains("pid=5678"), "Legacy restart did not wait for new PID: \(restarted.combined)")
+        let restartCalls = try String(contentsOfFile: directory + "/calls")
+        try check(restartCalls.contains("kill SIGTERM") && !restartCalls.contains("kickstart"), "Legacy restart used a forced restart")
+        try "".write(toFile: directory + "/stuck", atomically: true, encoding: .utf8)
+        try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+        let refused = try Command.run("/bin/sh", [testScript, "unlock"], timeout: 10)
+        try check(refused.status != 0 && !String(contentsOfFile: directory + "/calls").contains("-F rules"), "Recovery cleared rules while old daemon was alive")
+        let plugin = try String(contentsOf: project.appendingPathComponent("integrations/swiftbar/surge-guard.5s.sh"))
+        let pluginPath = directory + "/plugin.sh"
+        try ("HOME='\(directory)'\n" + plugin).write(toFile: pluginPath, atomically: true, encoding: .utf8)
+        let fallback = try Command.checked("/bin/sh", [pluginPath, "--section"])
+        try check(fallback.contains("param1=unlock") && !fallback.contains("---"), "Missing independent fallback when renderer is absent")
+    }
+    print("PASS: offline legacy recovery waits for exit and refuses to flush while daemon remains alive")
+
     for mask in 0..<64 {
         let state = Readiness(trustedProcess: mask & 1 != 0,
                               surgeService: mask & 2 != 0, connected: mask & 4 != 0,
@@ -75,6 +168,17 @@ do {
     let decoded = try JSON.decode(GuardSnapshot.self, from: Data(statusData.utf8))
     try check(decoded.bootId == snapshot.bootId, "Status schema did not round trip")
     print("PASS: boot-bound monotonic status/PF freshness")
+    let freshSnapshot = GuardSnapshot(runId: "display-test", firewallVerifiedUptime: SystemClock.seconds,
+                                     allowed: true, configurationMode: "enhanced", readiness: nil, session: nil, reasons: [])
+    let snapshotObject = try JSONSerialization.jsonObject(with: Data(JSON.encode(freshSnapshot).utf8))
+    for (running, state, included, expected) in [(true, "allowed", true, true), (false, "allowed", true, false),
+                                               (true, "unknown", true, false), (true, "allowed", false, false)] {
+        var object: [String: Any] = ["daemon_running": running, "state": state, "reason": ""]
+        if included { object["snapshot"] = snapshotObject }
+        let report = try JSON.decode(StatusReport.self, from: JSONSerialization.data(withJSONObject: object))
+        try check(report.firewallVerified == expected, "Menu accepted PID/condition-only or unknown status as verified PF")
+    }
+    print("PASS: menu requires running daemon and current verified PF; conditions alone cannot be green")
 
     var gate = GateConfiguration.standard
     gate.startupApps = ["com.example.B", "com.example.A"]

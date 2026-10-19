@@ -59,6 +59,10 @@ public struct StatusReport: Codable {
     public var snapshot: GuardSnapshot?
     public var reason: String
 
+    public var firewallVerified: Bool {
+        daemonRunning && ["allowed", "blocked"].contains(state) && snapshot?.fresh() == true
+    }
+
     public static func read() -> StatusReport {
         let service = try? Command.run("/bin/launchctl", ["print", "system/" + Paths.label])
         let serviceRunning = service?.status == 0 && service?.output.contains("state = running") == true

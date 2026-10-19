@@ -27,6 +27,11 @@ Read README.md first. It is the operational contract for all three components.
   bound to the current boot, process and monotonic freshness limits.
 - SurgeGate must consume verified daemon status, not proxy-port/utun guesses.
   Do not reintroduce force-kill, `pkill -f`, or success messages after app errors.
+- Install/verify the independent SwiftBar recovery menu before privileged changes.
+  `launchctl bootout` may return before daemon cleanup releases its lock. Wait
+  for actual lock/PID release, back up before replacement, verify fresh PF status
+  after startup and attempt rollback on update failure. Never fix this with sleeps
+  of a guessed duration or repeated forced restarts. Recovery must work offline.
 - Document the reactive/early-boot limitations accurately. Do not market this
   external gate as guaranteed packet-by-packet enforcement.
 

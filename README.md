@@ -27,8 +27,9 @@ Start here when inspecting or deploying on another Mac:
 2. Run the read-only build and condition checks below. A successful `check` is
    not evidence that the firewall service is installed or protecting the Mac.
 3. Choose an explicit policy mode; validate and probe that local configuration.
-4. Install/update the system component, verify `status`, then install the user
-   companion and SwiftBar. Do not run the user installer with sudo.
+4. Install the offline recovery menu **before** any privileged changes. Verify
+   its entries exist, then update the system component and verify `status`.
+   Install the user companion last. Do not run the user installer with sudo.
 5. Use `doctor` and retained logs for failures. Record live tests separately from
    syntax/unit checks. Do not silently unlock networking to make a test pass.
 
@@ -118,7 +119,18 @@ policy/status files are locally readable so the menu can inspect them.
 ## Install or update the system guard
 
 Do this locally: starting/updating briefly blocks and resets existing connections.
-Save an offline recovery command first:
+Prepare recovery first, as your normal user:
+
+```sh
+scripts/install-user.sh --recovery-only
+```
+
+For a combined menu, replace its Surge renderer with the `--section` invocation
+below. For a standalone menu, copy `integrations/swiftbar/surge-guard.5s.sh` into
+SwiftBar's configured plugin directory. Confirm **Recovery and backups / 恢复与备份**
+is visible before continuing. This menu supports the legacy guard, requires no
+network access and keeps an independent emergency action when a binary fails.
+Keep an offline recovery command as well:
 
 ```sh
 sudo /Library/PrivilegedHelperTools/surge-guard unlock
@@ -140,10 +152,14 @@ sudo /Library/PrivilegedHelperTools/surge-guard start
 sudo /Library/PrivilegedHelperTools/surge-guard doctor
 ```
 
-Updating a loaded service stops it normally, preserves blocked rules, atomically
-replaces the executable, preserves the policy and restarts it. Do not run
-`unlock` as an update step. An update failure can leave networking blocked; use
-the offline recovery command. An installed but unloaded service starts next boot.
+Updating a loaded service saves a root-owned backup, stops it normally, waits up
+to 20 seconds for its firewall lock to be released, then replaces and restarts
+it. `bootout` returning is not evidence that the old process has exited. The new
+service must publish fresh verified PF status within 20 seconds; when readiness
+passed before the update, it must return to `allowed`. A failure attempts to
+restore and restart the previous version. Errors remain errors even if rollback
+succeeds. Do not run `unlock` as an update step. If rollback also fails, use the
+independent emergency menu action. An installed but unloaded service starts next boot.
 For a routes-mode update, the staged new helper first verifies user-session CLI
 access before stopping the old daemon. A failed preflight aborts the update;
 keep Surge running during that upgrade. This preflight does not change PF.
@@ -152,6 +168,21 @@ The PF attachment must be first among filter rules. The installer retains the
 original `/private/etc/pf.conf.surge-guard.backup` and refuses edited managed
 blocks. Initial attachment may reload the main ruleset; review custom PF users.
 Ordinary reconciliation updates only `io.github.surge-guard`.
+
+The menu provides normal restart with result verification, Start/re-arm, Backup,
+Restore previous version/config, Restore previous policy, and Emergency remove
+block. Privileged actions open Terminal and explain the impact before requesting
+sudo. Emergency recovery waits for the previous PID to exit and clears only this
+guard's anchor; it never disables PF globally. It explicitly turns protection off
+until Start or next boot. A forced `kickstart -k` is not a normal restart path.
+
+Update/manual backups live in `/private/var/db/surge-guard/backups/<id>` with root-only
+access. Each `configure` separately saves the prior policy. Backups are retained;
+restoration replaces only this tool's binary, LaunchDaemon, anchor file and/or
+policy, never an entire old `pf.conf`. `rollback` can restore an older guard with
+fewer checks, including a legacy enhanced-only version; review its capabilities.
+The first installation has no previous version to restore. The user menu/config
+backup is separate from these trusted root backups.
 
 Root never executes the user-owned Surge CLI as root. A root-owned internal
 helper enters the console user's bootstrap session, drops UID/GID/groups, then
@@ -250,6 +281,9 @@ hook for every Apple-menu shutdown, power loss or kernel failure.
 | `sudo surge-guard configure FILE` | Validate then atomically install policy; daemon reloads automatically |
 | `sudo surge-guard logs [--follow] [--json]` | Last 200 readable events; optional follow or machine JSON Lines |
 | `sudo surge-guard restart` | TERM cleanup blocks before launchd restarts the daemon |
+| `sudo surge-guard backup` | Save installed binary, service, anchor file and policy |
+| `sudo surge-guard rollback` | Restore the last update/manual backup, restart and verify |
+| `sudo surge-guard restore-policy` | Restore the policy saved before the last configure |
 | `sudo surge-guard unlock` | Remove this gate temporarily; start/reboot re-arms it |
 | `surge-gate status [--json]` | Normal user; companion state, pending apps and freshness |
 | `surge-gate logs` / `restart` / `edit-config` | Normal user companion management |

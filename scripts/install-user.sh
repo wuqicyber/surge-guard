@@ -9,21 +9,37 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 guard_bin=/Library/PrivilegedHelperTools/surge-guard
 user_dir="$HOME/Library/Application Support/SurgeGuard"
 
-if [ ! -x "$project_dir/.build/release/surge-gate" ] || [ ! -x "$guard_bin" ]; then
-    printf '%s\n' 'Build both executables and install the system guard first. See README.' >&2
+if [ ! -x "$project_dir/.build/release/surge-guard" ]; then
+    printf '%s\n' 'Build the release executables first. See README.' >&2
     exit 1
 fi
-case "$("$guard_bin" --help)" in
-    *swiftbar*) ;;
-    *) printf '%s\n' 'Upgrade the system guard before installing the new user companion.' >&2; exit 1 ;;
-esac
 if [ "$#" -gt 1 ]; then
-    printf '%s\n' 'Usage: scripts/install-user.sh [--menu-only | SWIFTBAR_PLUGIN_DIRECTORY]' >&2
+    printf '%s\n' 'Usage: scripts/install-user.sh [--menu-only | --recovery-only | SWIFTBAR_PLUGIN_DIRECTORY]' >&2
     exit 1
 fi
 
-"$project_dir/.build/release/surge-gate" install
+mkdir -p "$user_dir/bin"
+chmod 700 "$user_dir" "$user_dir/bin"
+user_backup="$user_dir/backups/user-$(date +%Y%m%d-%H%M%S)-$$"
+mkdir -p "$user_backup"
+chmod 700 "$user_dir/backups" "$user_backup"
+for name in surge-guard-ui surge-guard-action surge-guard-menu; do
+    if [ -f "$user_dir/bin/$name" ]; then cp -p "$user_dir/bin/$name" "$user_backup/$name"; fi
+done
+install -m 700 "$project_dir/.build/release/surge-guard" "$user_dir/bin/surge-guard-ui.new"
+mv -f "$user_dir/bin/surge-guard-ui.new" "$user_dir/bin/surge-guard-ui"
+install -m 700 "$project_dir/integrations/swiftbar/surge-guard-action.sh" "$user_dir/bin/surge-guard-action"
 install -m 700 "$project_dir/integrations/swiftbar/surge-guard.5s.sh" "$user_dir/bin/surge-guard-menu"
+if [ "${1:-}" = --recovery-only ]; then
+    printf '%s\n' 'Offline recovery menu installed without changing system/user services. Invoke surge-guard-menu --section in your combined plugin.'
+    printf 'Previous user menu files: %s\n' "$user_backup"
+    exit 0
+fi
+case "$("$guard_bin" --help 2>/dev/null || true)" in
+    *swiftbar*) ;;
+    *) printf '%s\n' 'Recovery menu installed. Upgrade the system guard before installing the user companion.' >&2; exit 1 ;;
+esac
+"$project_dir/.build/release/surge-gate" install
 if [ "${1:-}" = --menu-only ]; then
     printf '%s\n' 'User service and menu renderer installed. Call the renderer with --section from your existing plugin.'
     exit 0

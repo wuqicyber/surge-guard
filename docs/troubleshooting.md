@@ -21,7 +21,7 @@ Never make the private directory world-readable to simplify menu access.
 
 | Symptom/reason | Check | Action |
 | --- | --- | --- |
-| `unknown`, `status_unavailable` | Is the new binary installed? Is the system job running? | An old daemon does not publish the new status schema. Build/update system first, then the user service/menu. Do not label PID-only detection as protected. |
+| `unknown`, `status_unavailable` | Is the new binary installed? Is the system job running? | An old daemon does not publish the new status schema. Install the independent recovery menu first, then update system and companion. Do not label PID-only detection as protected. |
 | `status_or_pf_audit_expired` | Current PID, boot and recent `pf_unverified`/restart events | Run root doctor. A stale snapshot cannot prove either allowed or blocked PF; do not assume the menu color alone proves protection. |
 | `stopped` | `launchctl print system/io.github.surge-guard` | Start the installed service; inspect startup errors if it exits. |
 | `unlocked` | `manual_unlock` event from this boot | This is intentional temporary removal. `start` or reboot re-arms; `uninstall` is permanent removal. |
@@ -71,6 +71,25 @@ failed. Remove personal URLs, group/node names, app lists, paths and raw logs.
 The policy/status files are locally readable and must not contain credentials.
 
 ## Recovery
+
+SwiftBar → **恢复与备份（离线可用）** is the first recovery path. It offers a
+normal restart with bounded result checks, start/re-arm, trusted backup/rollback,
+previous-policy restore and an independent emergency remove-block action.
+Legacy guards support restart/start/emergency removal before upgrading; backup
+commands are clearly marked as requiring the new system version.
+
+If an update reports a lock conflict, do not repeatedly click forced restart.
+An observed failure mode was `bootout` returning before the old daemon finished
+TERM cleanup: the updater immediately failed on its lock, then the old daemon
+left blocked rules with no loaded service. The fixed updater waits on the real
+lock, saves a backup, verifies startup and attempts rollback on failure. See
+[the incident contract](incidents/update-lock-race.md).
+
+Emergency removal works without executing the installed guard binary. It waits
+for the old PID to exit, clears only `io.github.surge-guard`, then verifies the
+anchor is empty. Protection is explicitly OFF until Start or next boot. It
+refuses to flush if the previous process is still alive. It never toggles Surge,
+disables PF globally, or restores a whole old `pf.conf`.
 
 In a local Terminal, `sudo /Library/PrivilegedHelperTools/surge-guard unlock`
 stops the system service and removes only this gate. Keep the command available

@@ -51,34 +51,106 @@ enum Admin {
             _ = try Probe.privilegedSession(configuration: config, helperPath: stagedBinary)
             EventLog.write("upgrade_probe_verified", message: "New user-session probe succeeded before service replacement")
         }
-        if upgrading {
-            // The old daemon handles TERM by blocking. Never unlock to update.
-            try Command.checked("/bin/launchctl", ["bootout", "system/" + Paths.label], timeout: 15)
-        }
+        let backup = FileManager.default.fileExists(atPath: Paths.binary) ? try Recovery.save(kind: "update") : nil
+        if let backup { try Recovery.validate(backup) }
+        let config = FileManager.default.fileExists(atPath: Paths.configuration) ? try Configuration.load() : .enhanced
+        var expectAllowed = try Probe.readiness().ready
+        if expectAllowed, config.mode == "routes" { expectAllowed = try Probe.privilegedSession(configuration: config, helperPath: stagedBinary).ready }
         do {
-            let lock = try RuntimeLock()
-            defer { withExtendedLifetime(lock) {} }
+            if upgrading { try stop() }
+            do {
+                let lock = try RuntimeLock(timeout: 20)
+                defer { withExtendedLifetime(lock) {} }
+                if upgrading {
+                    let firewall = Firewall()
+                    try firewall.prepareAttachment()
+                    try firewall.block()
+                }
+                try RootFiles.write(Policy.blocked, to: Policy.anchorPath, mode: 0o644)
+                let backup = Paths.pfConfig + ".surge-guard.backup"
+                if !FileManager.default.fileExists(atPath: backup) { try RootFiles.write(original, to: backup) }
+                guard rename(stagedBinary, Paths.binary) == 0 else { throw GuardError("Cannot atomically replace installed binary") }
+                try RootFiles.write(updated, to: Paths.pfConfig, mode: 0o644)
+                try RootFiles.write(plist, to: Paths.plist, mode: 0o644)
+                if !FileManager.default.fileExists(atPath: Paths.configuration) {
+                    try RootFiles.write(try JSON.encode(Configuration.enhanced, pretty: true), to: Paths.configuration, mode: 0o644)
+                }
+            }
             if upgrading {
-                let firewall = Firewall()
-                try firewall.prepareAttachment()
-                try firewall.block()
+                try start()
+                try waitForStatus(expectAllowed: expectAllowed)
             }
-            try RootFiles.write(Policy.blocked, to: Policy.anchorPath, mode: 0o644)
-            let backup = Paths.pfConfig + ".surge-guard.backup"
-            if !FileManager.default.fileExists(atPath: backup) {
-                try RootFiles.write(original, to: backup)
+        } catch {
+            let failure = String(describing: error)
+            EventLog.write("upgrade_failed", level: "error", message: failure)
+            if let backup {
+                do {
+                    try restore(backup, startService: upgrading)
+                    EventLog.write("rollback_completed", level: "warning", message: "Upgrade failed; previous files and service state restored", details: ["backup_id": backup.id])
+                } catch {
+                    // Report rollback failures separately; never silently unlock.
+                    EventLog.write("rollback_failed", level: "critical", message: "\(error)", details: ["backup_id": backup.id])
+                    throw GuardError("Upgrade failed: \(failure). Rollback failed: \(error). Use SwiftBar → Emergency recovery → Temporarily remove block.")
+                }
+                throw GuardError("Upgrade failed: \(failure). Previous files\(upgrading ? " and service" : "") restored. Inspect logs before retrying.")
             }
-            guard rename(stagedBinary, Paths.binary) == 0 else { throw GuardError("Cannot atomically replace installed binary") }
-            try RootFiles.write(updated, to: Paths.pfConfig, mode: 0o644)
-            try RootFiles.write(plist, to: Paths.plist, mode: 0o644)
-            if !FileManager.default.fileExists(atPath: Paths.configuration) {
-                try RootFiles.write(try JSON.encode(Configuration.enhanced, pretty: true), to: Paths.configuration, mode: 0o644)
-            }
+            throw error
         }
-        if upgrading { try start() }
         EventLog.write(upgrading ? "installation_updated" : "installation_created", message: "Root components installed; existing policy retained")
         print(upgrading ? "Updated and restarted. Verify status." : "Installed. Start with: sudo \(Paths.binary) start")
-        print("The daemon will also be loaded at the next boot. Keep the unlock command available offline.")
+        print("Recovery is available offline in SwiftBar. Previous files: \(backup.map { Paths.backups + "/" + $0.id } ?? "no previous installation")")
+    }
+
+    static func stop() throws {
+        if try loaded() { try Command.checked("/bin/launchctl", ["bootout", "system/" + Paths.label], timeout: 15) }
+        // bootout can return before TERM cleanup releases the daemon's flock.
+        let lock = try RuntimeLock(timeout: 20)
+        withExtendedLifetime(lock) {}
+    }
+
+    static func waitForStatus(expectAllowed: Bool = false, previousPID: Int32? = nil) throws {
+        let deadline = SystemClock.seconds + 20
+        var last = StatusReport.read()
+        while SystemClock.seconds < deadline {
+            last = StatusReport.read()
+            if let snapshot = last.snapshot, snapshot.pid != previousPID,
+               ["allowed", "blocked"].contains(last.state), !expectAllowed || last.state == "allowed" {
+                print("Verified: \(last.state.uppercased()), pid=\(snapshot.pid)\(last.reason.isEmpty ? "" : ", " + last.reason)")
+                return
+            }
+            usleep(200_000)
+        }
+        throw GuardError("Service did not reach verified \(expectAllowed ? "ALLOWED" : "PF status") within 20s: \(last.state) \(last.reason)")
+    }
+
+    static func restore(_ backup: BackupManifest, startService: Bool = true) throws {
+        try Recovery.validate(backup) // Refuse a damaged backup before stopping anything.
+        try stop()
+        do {
+            let lock = try RuntimeLock(timeout: 20)
+            defer { withExtendedLifetime(lock) {} }
+            try Recovery.restore(backup)
+        }
+        if startService {
+            try start()
+            let help = try Command.checked(Paths.binary, ["--help"])
+            if help.contains("swiftbar") { try waitForStatus() }
+            else {
+                let deadline = SystemClock.seconds + 20
+                let firewall = Firewall()
+                while SystemClock.seconds < deadline {
+                    if try loaded(), try firewall.attached(), try firewall.enabled() {
+                        let rules = try firewall.readRules().trimmingCharacters(in: .whitespacesAndNewlines)
+                        if try Probe.readiness().ready ? rules.isEmpty : rules.contains("surge-guard-block") {
+                            print("Previous legacy service and PF recovered. WARNING: this version has no routing gate; verify its capabilities.")
+                            return
+                        }
+                    }
+                    usleep(200_000)
+                }
+                throw GuardError("Previous legacy service did not recover verified PF within 20s")
+            }
+        }
     }
 
     static func start() throws {
@@ -102,7 +174,7 @@ enum Admin {
             try Command.checked("/bin/launchctl", ["bootout", "system/" + Paths.label], timeout: 15)
         }
         // Serialize with the daemon's final block operation before flushing.
-        let lock = try RuntimeLock()
+        let lock = try RuntimeLock(timeout: 20)
         defer { withExtendedLifetime(lock) {} }
         try Firewall().unlock()
         try? FileManager.default.removeItem(atPath: Paths.snapshot)
@@ -116,10 +188,12 @@ enum Admin {
 
     static func restart() throws {
         guard try loaded() else { throw GuardError("Service is not loaded; use start") }
+        let previous = StatusReport.read().snapshot?.pid
+        let expectAllowed = (try? CLI.check(["check"]).ready) == true
         // launchd sends TERM, allowing the daemon to install block rules.
         try Command.checked("/bin/launchctl", ["kill", "SIGTERM", "system/" + Paths.label])
         EventLog.write("restart_requested", message: "Requested normal stop; launchd KeepAlive restarts the service")
-        print("Restart requested. Inspect status after launchd starts the new process.")
+        try waitForStatus(expectAllowed: expectAllowed, previousPID: previous)
     }
 
     static func uninstall() throws {

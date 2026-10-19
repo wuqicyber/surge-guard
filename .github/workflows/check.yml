@@ -22,6 +22,8 @@ jobs:
           .build/release/surge-guard swiftbar --section
           sh -n scripts/install-user.sh
           sh -n integrations/swiftbar/surge-guard.5s.sh
+          sh -n integrations/swiftbar/surge-guard-action.sh
+          sh integrations/swiftbar/surge-guard-action.sh --help
       - name: Hosted runner has no Surge and must not report ready
         run: |
           if .build/release/surge-guard check; then

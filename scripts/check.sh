@@ -11,4 +11,6 @@ swift build -c release -Xswiftc -warnings-as-errors
 .build/release/surge-gate --help
 sh -n scripts/install-user.sh
 sh -n integrations/swiftbar/surge-guard.5s.sh
+sh -n integrations/swiftbar/surge-guard-action.sh
+sh integrations/swiftbar/surge-guard-action.sh --help
 git diff --check

@@ -52,6 +52,17 @@ appearance, current reasons, diagnostics, retained-then-follow logs, policy draf
 validation/application, normal restart and explicit temporary unlock. There must
 be one Surge section, and no green protection label based only on a PID.
 
+Before a system upgrade, confirm the independent recovery menu is installed and
+works offline with the currently installed version. Back up files first. Test a
+normal restart: a new PID and fresh PF status must be observed, or a timeout and
+reason shown. Do not use repeated `kickstart -k`. Exercise delayed old-process
+cleanup and an update failure in a controlled environment; verify automatic
+restoration and retain both failure/rollback logs. Confirm separate version and
+policy backups, restore commands, legacy capability warnings, and that an old
+whole `pf.conf` is never restored. On explicit emergency removal, the previous
+PID must be gone before anchor clearing; verify protection-off display and
+Start/re-arm. Never silently use emergency removal to pass an upgrade test.
+
 Verify the companion waits on recent system `allowed` status before each app
 launch. Test bundle IDs, ordering, an absent app, failed launch retry and a changed
 excluded-app setting. Confirm no lost pending apps. Verify periodic atomic

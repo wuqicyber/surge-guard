@@ -81,3 +81,38 @@ Not performed in this session:
 These are source and read-only checks, not a new live protection certification.
 The existing installed protection was left running. Follow `acceptance.md`
 after authorized local deployment before relying on the new version.
+
+## Update handoff incident and offline recovery — 2026-10-19
+
+- Inspected the unified log after reported complete connectivity loss. The new
+  query preflight succeeded, but the updater exited on an occupied firewall lock
+  before the old daemon finished stopping about 0.3 seconds later. The old
+  daemon left blocked rules and was not loaded again until a later manual start,
+  which logged `ALLOWED`. The installed binary was never replaced in that attempt.
+- Fixed the real lifecycle boundary: bounded lock-release wait, independent
+  management-operation lock, trusted update/policy backups, startup verification
+  and attempted automatic rollback. Restart uses TERM and waits for a new PID
+  and verified PF status. No forced `kickstart -k` remains in this integration.
+- Regression tests pass for delayed flock release, held-lock timeout, manifest
+  destination/path restrictions, the actual offline action script with fake
+  system commands (delayed exit, new restart PID, refusal to flush a live owner),
+  renderer-absent fallback and rejection of PID/condition-only green status.
+  Both release products build with warnings treated as errors; the full project
+  check script passes. These fixtures do not use live sudo/PF operations.
+- Installed only the user-side recovery renderer/action script and backed up
+  the existing private combined plugin outside SwiftBar's scanned directory.
+  Replaced its Surge section and legacy start/restart callers, preserving other
+  services. Shell syntax passed; the isolated section renders the independent
+  actions. The user's screenshot confirms the new orange/unknown section is
+  visible. Its initial misleading missing-file error was replaced with an
+  explanation of the old/new version mismatch. Legacy SurgeGate is identified
+  as awaiting migration rather than reported as a running new companion.
+- Confirmed the old system daemon is still running and does not publish the new
+  status file. Fresh Enhanced Mode and configured rule checks pass. This is not
+  a current privileged PF verification, and the menu does not claim one.
+
+Not performed: privileged update/automatic rollback/backup-restore acceptance,
+live emergency removal or restart, native companion migration, actual shutdown,
+power-loss/sleep recovery or full light/dark visual interaction. The system
+daemon and PF were not changed during this repair. Native UI inspection timed
+out; rendered output and the supplied screenshot do not replace full visual QA.

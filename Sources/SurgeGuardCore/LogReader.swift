@@ -41,6 +41,9 @@ public enum LogReader {
                       "configuration_installed": "配置已应用", "rule_probe_failed": "分流查询失败",
                       "pf_reconciled": "PF 规则已重新校验", "pf_unverified": "无法确认防火墙保护",
                       "manual_unlock": "已手动解除保护", "restart_requested": "已请求正常重启",
+                      "backup_created": "恢复备份已保存", "backup_restored": "已恢复上一次备份",
+                      "upgrade_failed": "升级失败", "rollback_completed": "升级失败，上一版已恢复",
+                      "rollback_failed": "自动恢复失败，请使用离线恢复入口",
                       "gate_started": "应用恢复服务启动", "application_restored": "应用已启动",
                       "application_restore_failed": "应用启动失败，保留待重试", "shutdown_started": "开始有序退出",
                       "shutdown_aborted": "关机已中止，会话已保留", "shutdown_requested": "已请求系统关机",
@@ -66,7 +69,8 @@ public enum LogReader {
         if let app = record["app"] as? String, !app.isEmpty { lines.append("  应用: \(text(app))") }
         let metadata = [details["mode"].map { "配置=\(text($0))" }, details["pf"].map { "PF=\(text($0))" },
                         details["outbound_mode"].map { "出站模式=\(text($0))" }, details["duration_ms"].map { "耗时=\(text($0))ms" },
-                        record["pid"].map { "pid=\(text($0))" }, details["run_id"].map { "run=\(text($0).prefix(8))" }].compactMap { $0 }
+                        record["pid"].map { "pid=\(text($0))" }, details["run_id"].map { "run=\(text($0).prefix(8))" },
+                        details["backup_id"].map { "备份=\(text($0))" }, details["kind"].map { "备份类型=\(text($0))" }].compactMap { $0 }
         if !metadata.isEmpty { lines.append("  " + metadata.joined(separator: "  ")) }
         lines.append("  event=\(text(event))")
         return lines.joined(separator: "\n")

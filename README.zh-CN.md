@@ -16,7 +16,7 @@ PF；它仍是实验性外部门禁，不能证明每个数据包都不可绕过
 1. 阅读 README 和 `AGENTS.md`，先检查已有安装、配置、服务和日志。
 2. 构建并执行只读检查。`check` 成功只代表条件通过，不代表 PF 已运行。
 3. 为目标机器准备明确的配置，先验证，再安装。
-4. 安装系统守护并确认状态，再以普通用户安装 SurgeGate 和 SwiftBar。
+4. 先安装并确认 SwiftBar 离线恢复入口可用，再更新系统守护；确认系统状态后安装 SurgeGate。
 5. 排障从 `doctor`、最近日志和具体原因开始；实机验收单独记录，不用构建成功代替。
 
 不要将本机配置、Surge profile、订阅、节点凭据、原始日志或诊断包提交到 GitHub。
@@ -79,7 +79,16 @@ DIRECT/REJECT、错误节点、空白名单、无效配置、查询失败或过�
 
 ## 安装／升级系统守护
 
-在本机操作，预先离线保存恢复命令：
+在本机操作。**先以普通用户安装离线恢复组件，确认菜单可用，再改系统守护：**
+
+```sh
+scripts/install-user.sh --recovery-only
+```
+
+已有控制中心时，按下文接入 `surge-guard-menu --section`；独立菜单则将
+`integrations/swiftbar/surge-guard.5s.sh` 复制到 SwiftBar 插件目录。
+确认“恢复与备份（离线可用）”已显示。该入口兼容旧版守护，网络断开时仍可用。
+同时离线保留恢复命令：
 
 ```sh
 sudo /Library/PrivilegedHelperTools/surge-guard unlock
@@ -99,11 +108,29 @@ sudo /Library/PrivilegedHelperTools/surge-guard start
 sudo /Library/PrivilegedHelperTools/surge-guard doctor
 ```
 
-升级已运行服务时自动正常停止、保留阻断、原子替换并重启，不需要先 unlock。
+升级已运行服务前自动保存 root 专用备份，再正常停止旧服务，**等待防火墙锁实际释放**，
+最多 20 秒。`bootout` 返回不代表旧进程已经退出。之后原子替换、启动，并等待新 PF 状态验证；
+升级前就绪时，须重新达到放行。失败自动尝试恢复上一版文件并重启，恢复成功也会明确报告升级失败。
+不需要先 unlock。
 分流模式升级会在停止旧服务前，先用暂存的新程序验证用户会话查询通路；预检失败就中止升级，
 因此升级时保持 Surge 运行。此预检不修改 PF。
-可能短暂中断已有连接；失败时可能保持断网，应使用离线恢复命令。
+可能短暂中断已有连接；若自动恢复也失败，使用菜单中的“应急解除阻断”。
 系统守护以 root 运行，但执行用户所有的 Surge CLI 前，会进入登录用户会话并降低权限。
+
+“恢复与备份”提供：正常重启并等待验证、启动／恢复保护、备份当前版本与配置、恢复上一版、
+恢复上一次规则，以及应急解除阻断。管理员操作在终端显示影响、授权和结果，不再使用
+`kickstart -k` 强杀。应急入口独立于守护程序和策略，先等待旧 PID 退出，再清除此工具的
+anchor；不会全局关闭 PF。**应急解除会关闭本工具的保护，启动守护或下次开机才恢复。**
+
+```sh
+sudo /Library/PrivilegedHelperTools/surge-guard backup
+sudo /Library/PrivilegedHelperTools/surge-guard rollback
+sudo /Library/PrivilegedHelperTools/surge-guard restore-policy
+```
+
+系统备份位于 `/private/var/db/surge-guard/backups/<id>`，仅 root 可读。
+升级／手工备份与规则变更前的备份分开保存，保留历史，不整份覆盖其他服务修改过的 `pf.conf`。
+恢复旧版可能减少保护条件，尤其旧版仅检查增强模式，需明确核对。首次安装没有上一版可恢复。
 
 ## 安装 SurgeGate 和 SwiftBar
 

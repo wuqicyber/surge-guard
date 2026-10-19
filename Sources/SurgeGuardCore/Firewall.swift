@@ -12,6 +12,7 @@ public enum Paths {
     public static let configuration = publicState + "/policy.json"
     public static let snapshot = publicState + "/status.json"
     public static let unlockMarker = publicState + "/unlocked.json"
+    public static let backups = runtime + "/backups"
 }
 
 public enum RootFiles {
@@ -59,13 +60,24 @@ public enum RootFiles {
 
 public final class RuntimeLock {
     private let descriptor: Int32
-    public init() throws {
+    public init(timeout: TimeInterval = 0, management: Bool = false) throws {
         try RootFiles.prepareRuntime()
-        descriptor = open(Paths.runtime + "/lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        descriptor = open(Paths.runtime + (management ? "/management.lock" : "/lock"), O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw GuardError("Cannot open service lock") }
-        if flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+        do { try Self.acquire(descriptor, timeout: timeout) }
+        catch {
             close(descriptor)
-            throw GuardError("Another surge-guard process owns the firewall; stop it first")
+            throw error
+        }
+    }
+    public static func acquire(_ descriptor: Int32, timeout: TimeInterval) throws {
+        let deadline = SystemClock.seconds + max(0, timeout)
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK || errno == EAGAIN else { throw GuardError("Cannot acquire firewall lock: errno \(errno)") }
+            guard SystemClock.seconds < deadline else {
+                throw GuardError("Timed out waiting for the previous surge-guard process to release the firewall lock")
+            }
+            usleep(50_000)
         }
     }
     deinit { close(descriptor) }
