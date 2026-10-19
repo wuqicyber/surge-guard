@@ -234,3 +234,25 @@ acceptance items above remain unperformed.
   merging. Re-ran `scripts/check.sh`: all 28 groups and release/shell checks pass.
   No new blocking code issue was found in that review. Remaining live acceptance
   and the pending system-binary installation described above still apply.
+
+## Group-only routing with an optional final-node allowlist — 2026-10-19
+
+- A route may now omit allowed_final_policies. Exact rule-selected group and
+  resolved proxy checks remain required; a supplied list still restricts final
+  nodes. Empty/null/malformed lists are rejected. Parser evaluation and daemon
+  result binding share the final-policy check, retaining rejection of missing,
+  DIRECT and REJECT results. Existing full-list configurations keep the same
+  JSON encoding and policy fingerprint.
+- All 29 standalone groups and warnings-as-errors release/shell checks pass.
+  Added omission round-trip/fingerprint, changed proxy, wrong/unresolved group,
+  direct/reject and invalid-list cases. Existing unlisted-node rejection remains.
+- Prepared a private group-only draft after backing up the previous draft. Its
+  normal-user validate and live rule-only check pass without target requests.
+  The current installed full-list policy still passes, and its new-build query
+  fingerprint matches the running daemon snapshot. The system policy/binary
+  have not been replaced; this is not live group-only enforcement acceptance.
+- Updated the user renderer through recovery-only installation. Older guards
+  still require the list, so documentation now upgrades the binary with its
+  existing policy before applying group-only JSON. Fresh installs can configure
+  the new format before the first start. No PF changes or service restart were
+  performed during these checks.

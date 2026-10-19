@@ -217,6 +217,29 @@ do {
     try rejects { _ = try RouteResult.evaluate(Data("not-json".utf8), check: routeCheck) }
     print("PASS: nested routing, unlisted/direct targets and malformed CLI responses")
 
+    let groupOnly = RouteCheck(url: "https://example.com", requiredGroup: "Residential")
+    let groupConfiguration = Configuration(version: 1, mode: "routes", routeChecks: [groupOnly])
+    let groupJSON = try JSON.encode(groupConfiguration)
+    try check(!groupJSON.contains("allowed_final_policies"), "Group-only policy serialized a misleading null allowlist")
+    try check(try Configuration.decode(Data(groupJSON.utf8)) == groupConfiguration, "Omitted allowlist did not round trip")
+    try check(try groupConfiguration.fingerprint() != routeConfig.fingerprint(), "Group-only policy shared a fingerprint with a restricted policy")
+    for badValue in ["null", "[]", "\"Node A\"", "[1]", "[\"Node A\",\"Node A\"]", "[\"DIRECT\"]"] {
+        let invalid = groupJSON.replacingOccurrences(of: "\"required_group\":\"Residential\"", with: "\"allowed_final_policies\":\(badValue),\"required_group\":\"Residential\"")
+        try rejects { _ = try Configuration.decode(Data(invalid.utf8)) }
+    }
+    for final in ["Node A", "Node C"] {
+        var value = explanation; value["final"] = final
+        try check(try RouteResult.evaluate(JSONSerialization.data(withJSONObject: value), check: groupOnly).ready, "Group-only matching rejected a changed proxy node")
+    }
+    for (key, value) in [("rule-policy", "Other"), ("final", "DIRECT"), ("final", "REJECT"), ("final-type", "DIRECT"), ("final-type", "REJECT")] {
+        var invalid = explanation; invalid[key] = value
+        try check(!(try RouteResult.evaluate(JSONSerialization.data(withJSONObject: invalid), check: groupOnly)).ready, "Group-only matching accepted a wrong group or direct/reject result")
+    }
+    var unresolved = explanation; unresolved["steps"] = []
+    try check(!(try RouteResult.evaluate(JSONSerialization.data(withJSONObject: unresolved), check: groupOnly)).ready, "Group-only matching accepted an unresolved group")
+    try check(!groupOnly.allowsFinalPolicy(nil) && !groupOnly.allowsFinalPolicy(""), "Daemon result binding accepted a missing final policy")
+    print("PASS: optional final-policy allowlist accepts group proxy changes; null/empty/malformed lists and direct/reject results fail closed")
+
     var snapshot = GuardSnapshot(runId: "test", firewallVerifiedUptime: 100, allowed: true,
                                  configurationMode: "routes", readiness: nil, session: nil, reasons: [])
     snapshot.bootId = "boot-a"; snapshot.checkedUptime = 100

@@ -61,16 +61,18 @@ cp examples/routes.json policy.local.json
   "route_checks": [
     {
       "url": "https://example.com",
-      "required_group": "Residential",
-      "allowed_final_policies": ["Residential A", "Residential B"]
+      "required_group": "Residential"
     }
   ]
 }
 ```
 
 `routes` 模式要求增强模式就绪、当前为 Rule 模式、所有 URL 检查均通过。
-策略组名称精确匹配，并解析到白名单中的最终代理，支持嵌套组。
-DIRECT/REJECT、错误节点、空白名单、无效配置、查询失败或过期都不放行。
+策略组名称精确匹配并解析到代理，支持嵌套组。省略 `allowed_final_policies` 时，
+组内更换代理节点不需要修改门禁配置。如果还要限制最终节点，可以额外填写
+`"allowed_final_policies": ["Residential A", "Residential B"]`；已有白名单仍然有效。
+显式填写空数组或 null 会被拒绝。两种配置都拒绝 DIRECT/REJECT、错误策略组、无效配置及查询失败／过期；
+填写了白名单时，还会拒绝不在名单内的节点。
 不会根据名称中“包含美国”等文字猜测节点属性，也不进行出口 IP 或网站连通性探测。
 配置 URL 使用默认请求上下文；实际应用的进程、协议或 URL 特定规则可能影响结果。
 
@@ -98,6 +100,17 @@ sudo /Library/PrivilegedHelperTools/surge-guard unlock
 sudo .build/release/surge-guard configure policy.local.json
 sudo .build/release/surge-guard install
 ```
+
+上面是全新安装的顺序。升级已有守护时，先保留现有策略安装新程序，验证状态，再用新程序应用新策略：
+
+```sh
+sudo .build/release/surge-guard install
+/Library/PrivilegedHelperTools/surge-guard status --json
+sudo /Library/PrivilegedHelperTools/surge-guard configure policy.local.json
+```
+
+旧程序要求 `allowed_final_policies` 必填；不要在升级前给旧守护应用省略该字段的新配置，
+否则它会按无效配置阻断联网。
 
 首次不执行 `configure` 时生成 enhanced 配置；升级保留已有配置。
 全新安装还需要启动：

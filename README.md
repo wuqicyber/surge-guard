@@ -82,7 +82,7 @@ For additional routing conditions, copy and edit a local policy:
 
 ```sh
 cp examples/routes.json policy.local.json
-# Replace the example URL, exact group and allowed final proxy names.
+# Replace the example URL and exact group.
 .build/release/surge-guard validate policy.local.json
 .build/release/surge-guard check --config policy.local.json --json
 ```
@@ -94,8 +94,7 @@ cp examples/routes.json policy.local.json
   "route_checks": [
     {
       "url": "https://example.com",
-      "required_group": "Residential",
-      "allowed_final_policies": ["Residential A", "Residential B"]
+      "required_group": "Residential"
     }
   ]
 }
@@ -103,9 +102,14 @@ cp examples/routes.json policy.local.json
 
 In `routes` mode, Enhanced Mode must be ready, outbound mode must be `rule`, and
 **every** route check must match the exact rule-selected group, resolve that
-group and end at an allowed proxy. Nested groups are supported. DIRECT/REJECT
-results, empty allowlists, invalid JSON and failed/expired CLI queries fail closed.
-Changing to another allowed node is logged. No group/node/domain is hardcoded.
+group and resolve to a proxy. Nested groups are supported. Omitting
+`allowed_final_policies` allows proxy changes within that group without editing
+this configuration. To additionally restrict final nodes, add, for example,
+`"allowed_final_policies": ["Residential A", "Residential B"]` to a route check.
+Existing allowlists retain their restrictions; explicit empty/null lists are
+rejected. DIRECT/REJECT results, wrong groups, invalid JSON and failed/expired
+queries fail closed in both forms. Node changes are logged. No group/node/domain
+is hardcoded.
 
 Surge CLI rule evaluation does not make an HTTP request to the target. It checks
 the current rule decision, not real egress geography, residential-IP status or
@@ -136,12 +140,23 @@ Keep an offline recovery command as well:
 sudo /Library/PrivilegedHelperTools/surge-guard unlock
 ```
 
-Apply the chosen policy before installing; omit `configure` to use the default
-on first install, or retain an existing policy on update:
+On a fresh installation, apply the chosen policy before installing; omit
+`configure` to use the enhanced-only default:
 
 ```sh
 sudo .build/release/surge-guard configure policy.local.json
 sudo .build/release/surge-guard install
+```
+
+On updates, install the new binary with the existing policy first, verify status,
+then apply any policy change using the installed binary. Older guards require
+`allowed_final_policies`; giving them group-only JSON before upgrading would
+block networking as an invalid configuration.
+
+```sh
+sudo .build/release/surge-guard install
+/Library/PrivilegedHelperTools/surge-guard status --json
+sudo /Library/PrivilegedHelperTools/surge-guard configure policy.local.json
 ```
 
 On a **fresh install**, load the service:

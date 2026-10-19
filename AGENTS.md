@@ -21,6 +21,11 @@ Read README.md first. It is the operational contract for all three components.
 - Preserve the existing signature, extension, VIF, route and IPv6 checks.
 - Configured route checks fail closed. Never convert a malformed/missing policy,
   failed CLI query or expired result into enhanced-only success.
+- Omitted allowed_final_policies means exact group matching without a node
+  allowlist; a supplied list remains nonempty and restrictive. Null/empty lists
+  are errors. DIRECT/REJECT and unresolved groups remain blocked in both forms.
+  Upgrade older binaries with their existing policy before applying group-only
+  JSON; older readers reject the omitted field and would block networking.
 - Run user-owned Surge CLI code only after dropping privileges. Do not execute
   user scripts or configured shell commands as root.
 - A condition check is not a claim that PF is active. A cached status must be
