@@ -1,0 +1,23 @@
+Sources/SurgeGuardCore/GateConfiguration.swift
+  s_feb680f5d77ef5::t_a2299d04af4c9e 111-134
+Tests/SurgeGuardTests/main.swift
+  s_feb680f5d77ef5::t_50cebe79aa8aeb 198-209
+integrations/swiftbar/surge-guard.5s.sh
+  s_feb680f5d77ef5::t_f1d54e92999be6 2,11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "6bbb8c6e9a36373271c2c559e29d5a1bd40a3399",
+  "prompts": {},
+  "sessions": {
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
