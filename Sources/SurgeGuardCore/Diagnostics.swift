@@ -1,0 +1,126 @@
+import Foundation
+import Darwin
+
+public enum SystemClock {
+    public static var seconds: Double {
+        var scale = mach_timebase_info_data_t()
+        mach_timebase_info(&scale)
+        return Double(mach_continuous_time()) * Double(scale.numer) / Double(scale.denom) / 1_000_000_000
+    }
+
+    public static var bootID: String {
+        var size = 0
+        guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 1 else { return "" }
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.bootsessionuuid", &bytes, &size, nil, 0) == 0 else { return "" }
+        return String(cString: bytes)
+    }
+}
+
+public struct GuardSnapshot: Codable {
+    public var version = 1
+    public var bootId: String
+    public var runId: String
+    public var pid: Int32
+    public var checkedAt: Date
+    public var checkedUptime: Double
+    public var firewallVerifiedUptime: Double
+    public var allowed: Bool
+    public var configurationMode: String
+    public var readiness: Readiness?
+    public var session: SessionObservation?
+    public var reasons: [String]
+    public var enforcement = "surge_readiness_gate"
+
+    public init(runId: String, firewallVerifiedUptime: Double, allowed: Bool, configurationMode: String,
+                readiness: Readiness?, session: SessionObservation?, reasons: [String]) {
+        bootId = SystemClock.bootID
+        self.runId = runId
+        pid = getpid()
+        checkedAt = Date()
+        checkedUptime = SystemClock.seconds
+        self.firewallVerifiedUptime = firewallVerifiedUptime
+        self.allowed = allowed
+        self.configurationMode = configurationMode
+        self.readiness = readiness
+        self.session = session
+        self.reasons = reasons
+    }
+
+    public func fresh(boot: String = SystemClock.bootID, now: Double = SystemClock.seconds) -> Bool {
+        !boot.isEmpty && version == 1 && bootId == boot && checkedUptime <= now && now - checkedUptime < 8 &&
+            firewallVerifiedUptime <= now && now - firewallVerifiedUptime < 8
+    }
+}
+
+public struct StatusReport: Codable {
+    public var state: String
+    public var daemonRunning: Bool
+    public var snapshot: GuardSnapshot?
+    public var reason: String
+
+    public var firewallVerified: Bool {
+        daemonRunning && ["allowed", "blocked"].contains(state) && snapshot?.fresh() == true
+    }
+
+    public static func read() -> StatusReport {
+        let service: CommandResult
+        let serviceRunning: Bool
+        do {
+            service = try Command.run("/bin/launchctl", ["print", "system/" + Paths.label])
+            serviceRunning = try self.serviceRunning(service)
+        } catch {
+            return StatusReport(state: "unknown", daemonRunning: false, snapshot: nil, reason: "service_query_failed: \(error)")
+        }
+        do {
+            try RootFiles.verify(Paths.publicState, directory: true)
+            try RootFiles.verify(Paths.snapshot)
+            let snapshot = try JSON.decode(GuardSnapshot.self, from: Data(contentsOf: URL(fileURLWithPath: Paths.snapshot)))
+            let running = try self.serviceRunning(service, pid: snapshot.pid)
+            guard running else { return StatusReport(state: "stopped", daemonRunning: false, snapshot: snapshot, reason: "daemon_not_running") }
+            guard snapshot.fresh() else {
+                return StatusReport(state: "unknown", daemonRunning: true, snapshot: snapshot, reason: "status_or_pf_audit_expired")
+            }
+            return StatusReport(state: snapshot.allowed ? "allowed" : "blocked", daemonRunning: true,
+                                snapshot: snapshot, reason: snapshot.reasons.joined(separator: "; "))
+        } catch {
+            if !serviceRunning, let marker = try? readUnlockMarker(), marker == SystemClock.bootID, !marker.isEmpty {
+                return StatusReport(state: "unlocked", daemonRunning: false, snapshot: nil, reason: "manual_unlock_until_start_or_reboot")
+            }
+            return StatusReport(state: "unknown", daemonRunning: serviceRunning, snapshot: nil, reason: "status_unavailable: \(error)")
+        }
+    }
+
+    public static func serviceRunning(_ service: CommandResult, pid: Int32? = nil) throws -> Bool {
+        guard service.status == 0 else {
+            if service.status == 113 && service.combined.contains("Could not find service") { return false }
+            throw GuardError("launchctl status \(service.status): \(service.combined.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        let lines = service.output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        return lines.contains("state = running") && (pid.map { lines.contains("pid = \($0)") } ?? true)
+    }
+
+    private static func readUnlockMarker() throws -> String {
+        try RootFiles.verify(Paths.publicState, directory: true)
+        try RootFiles.verify(Paths.unlockMarker)
+        let data = try Data(contentsOf: URL(fileURLWithPath: Paths.unlockMarker))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: String]
+        return object?["boot_id"] ?? ""
+    }
+}
+
+public enum EventLog {
+    public static func write(_ event: String, level: String = "info", message: String, details: [String: Any] = [:]) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let record: [String: Any] = ["time": timestamp, "component": "SurgeGuard", "level": level, "event": event,
+                                     "pid": getpid(), "boot_id": SystemClock.bootID, "message": message, "details": details]
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .withoutEscapingSlashes]) else { return }
+        let line = String(decoding: data, as: UTF8.self) + "\n"
+        NSLog("surge-guard: %@", line)
+        guard geteuid() == 0 else { return }
+        do {
+            try RootFiles.prepareRuntime()
+            try EventFile.append(data, to: Paths.eventsLog, owner: 0, lockPath: Paths.runtime + "/events.lock")
+        } catch { NSLog("surge-guard: LOGGING ERROR: %@", String(describing: error)) }
+    }
+}

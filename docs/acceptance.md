@@ -28,6 +28,12 @@ For each transition, record the time, `surge-guard check`, root `status`, logs, 
 | Surge open, Enhanced Mode off | Still blocked | No UI/process-only false positive |
 | Enhanced Mode starting | Blocked until all readiness checks pass | Startup state |
 | Enhanced Mode ready | Existing Surge routing policy works | Proxy + DIRECT compatibility |
+| Routes mode, all configured URL/group/node checks pass | Allowed after a recent user-session query | Policy gate |
+| Wrong group, unlisted node, DIRECT result, or Direct/Global mode | Blocked | No route-condition bypass |
+| Change to another allowlisted node | Allowed; parsed route change appears in logs | Successful decision audit |
+| CLI fails, hangs, user logs out, or rule result expires | Blocked; specific reason recorded | Query failure and freshness |
+| Invalid/missing installed policy | Blocked; no readiness-only fallback | Configuration failure |
+| Old boot/PID or stale status/PF audit | Menu reports unknown/stopped; Gate does not restore apps | No cached green status |
 | Turn Enhanced Mode off | Blocked; measure actual latency | Toggle path |
 | Quit or force-quit Surge | Blocked; measure actual latency | Process/extension exit |
 | Another VPN active, Surge off | Blocked | Wrong-tunnel rejection |
@@ -38,6 +44,39 @@ For each transition, record the time, `surge-guard check`, root `status`, logs, 
 | Manual `unlock` | Guard stops; its rules clear | Offline recovery |
 | Reboot after `unlock` | Installed service re-arms after starting | Temporary unlock semantics |
 | `uninstall`, then reboot | Guard does not return | Permanent removal |
+
+## Companion and menu acceptance
+
+Use a disposable/saved application session. Validate both light and dark menu
+appearance, current reasons, diagnostics, retained-then-follow logs, policy draft
+validation/application, normal restart and explicit temporary unlock. There must
+be one Surge section, and no green protection label based only on a PID.
+
+Before a system upgrade, confirm the independent recovery menu is installed and
+works offline with the currently installed version. Back up files first. Test a
+normal restart: a new PID and fresh PF status must be observed, or a timeout and
+reason shown. Do not use repeated `kickstart -k`. Exercise delayed old-process
+cleanup and an update failure in a controlled environment; verify automatic
+restoration and retain both failure/rollback logs. Confirm separate version and
+policy backups, restore commands, legacy capability warnings, and that an old
+whole `pf.conf` is never restored. On explicit emergency removal, the previous
+PID must be gone before anchor clearing; verify protection-off display and
+Start/re-arm. Never silently use emergency removal to pass an upgrade test.
+
+Verify the companion waits on recent system `allowed` status before each app
+launch. Test bundle IDs, ordering, an absent app, failed launch retry and a changed
+excluded-app setting. Confirm no lost pending apps. Verify periodic atomic
+session checkpoints and recovery after a user-service restart. An app inventory
+failure must retain the previous record rather than overwrite it with empty data.
+
+On a saved/disposable session, test an app refusing normal quit or showing an
+unsaved-document prompt. Ordered shutdown must abort without SIGKILL/pkill, keep
+Surge until other apps finish, and retain the pre-shutdown session. Only request
+OS shutdown after Surge exits and the firewall is verified blocked. Check cancelled
+OS shutdown recovery and that snapshots cannot overwrite the retained session.
+
+Test the legacy migration using copied local data, confirm original files remain,
+and confirm only one companion LaunchAgent runs. Do not publish the legacy data.
 
 Do not claim that `SIGKILL` of the guard while allowed remains closed: this is a documented limitation. If intentionally testing it, record the open interval and verify launchd recovery. Likewise, boot-time traffic before PF/service activation is not covered by the guarantee.
 

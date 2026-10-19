@@ -4,3 +4,7 @@
 *.pcap
 *.pcapng
 *.log
+*.local.json
+.local/
+diagnostics/
+backups/
