@@ -155,3 +155,19 @@ unlock/backup restoration/automatic rollback acceptance, actual application
 quit/refusal and OS shutdown, power-loss/sleep recovery, and post-fix light/dark
 visual interaction. No Surge toggles, system guard restart or PF changes were
 issued by the agent during the user-companion migration.
+
+## Menu naming, companion indicator and power controls — 2026-10-19
+
+- Renamed the menu display to `SurgeGuard`. Added a structured companion status
+  reader: green requires a running/fresh/ready companion, zero pending apps and
+  a fresh allowed system gate. Focused cases reject green for stale/stopped,
+  waiting, restoring, error, shutdown and blocked-gate states. All 22 standalone
+  test groups and both warnings-as-errors release builds pass.
+- Installed only the updated user renderer. Its isolated output shows green
+  `SurgeGate`, blue restart and red shutdown with larger text at the top of the
+  SurgeGate submenu; a separator divides power controls from management/logs.
+  Confirmed both power commands are children of SurgeGate, not a separate root
+  menu. The current primary status text also uses readable light/dark colors.
+- Read both installed property lists and verified RunAtLoad/KeepAlive. This
+  establishes automatic boot/login configuration, not actual reboot acceptance.
+  No power command, system service restart or firewall mutation was executed.

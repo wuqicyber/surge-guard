@@ -195,6 +195,18 @@ do {
         try check(report.firewallVerified == expected, "Menu accepted PID/condition-only or unknown status as verified PF")
     }
     print("PASS: menu requires running daemon and current verified PF; conditions alone cannot be green")
+    for (running, fresh, state, pending, allowed, green) in [
+        (true, true, "ready", [String](), true, true),
+        (false, true, "ready", [], true, false), (true, false, "ready", [], true, false),
+        (true, true, "ready", [], false, false), (true, true, "ready", ["com.example.A"], true, false),
+        (true, true, "waiting", [], true, false), (true, true, "restoring", [], true, false),
+        (true, true, "error", [], true, false), (true, true, "shutting_down", [], true, false)
+    ] {
+        let object: [String: Any] = ["running": running, "fresh": fresh, "status": ["state": state, "pending": pending]]
+        let report = try JSON.decode(GateStatusReport.self, from: JSONSerialization.data(withJSONObject: object))
+        try check(report.menuTitle(guardAllowed: allowed).contains("🟢") == green, "SurgeGate menu displayed false green")
+    }
+    print("PASS: companion green requires fresh running ready state, no pending apps and verified network permission")
 
     var gate = GateConfiguration.standard
     gate.startupApps = ["com.example.B", "com.example.A"]

@@ -17,13 +17,13 @@ enum SwiftBar {
         var lines = sectionOnly ? [] : ["\(icon) | size=13", "---"]
         // SwiftBar 2.1.1 clears submenu actions during live updates; a color preserves the action.
         let parentStyle = " | color=#1F2937,#F2F2F7"
-        lines.append("Surge Guard · \(icon) \(title)" + parentStyle)
+        lines.append("SurgeGuard · \(icon) \(title)" + parentStyle)
         if let snapshot = status.snapshot {
             let current = status.firewallVerified
-            lines.append("-- 配置：\(snapshot.configurationMode == "routes" ? "增强模式 + 分流检查" : "增强模式")")
-            lines.append("-- 增强模式检查：\(current ? (snapshot.readiness?.ready == true ? "就绪" : "未就绪") : "历史结果，待重新验证")")
+            lines.append("-- 配置：\(snapshot.configurationMode == "routes" ? "增强模式 + 分流检查" : "增强模式")" + parentStyle)
+            lines.append("-- 增强模式检查：\(current ? (snapshot.readiness?.ready == true ? "就绪" : "未就绪") : "历史结果，待重新验证")" + parentStyle)
             for route in snapshot.session?.routes ?? [] {
-                lines.append("-- \(current ? (route.ready ? "🟢" : "🔴") : "🟠") 分流\(current ? "检查" : "历史记录")：\(clean(route.url)) → \(clean(route.finalPolicy ?? "未知"))")
+                lines.append("-- \(current ? (route.ready ? "🟢" : "🔴") : "🟠") 分流\(current ? "检查" : "历史记录")：\(clean(route.url)) → \(clean(route.finalPolicy ?? "未知"))" + parentStyle)
             }
             let age = max(0, Int(Date().timeIntervalSince(snapshot.checkedAt)))
             lines.append("-- 最近检查：\(age) 秒前 · PF 状态为最近验证结果 | color=#595959,#C7C7CC size=12")
@@ -69,9 +69,19 @@ enum SwiftBar {
             }
         }
         if FileManager.default.isExecutableFile(atPath: CLI.gateBinary) {
-            let gateStatus = (try? Command.checked(CLI.gateBinary, ["status"], timeout: 3)) ?? "SurgeGate 状态不可用"
-            lines.append("SurgeGate · \(clean(gateStatus))" + parentStyle)
-            for (title, args) in [("查看 SurgeGate 日志", ["logs"]), ("重启 SurgeGate", ["restart"]), ("编辑应用配置", ["edit-config"]), ("有序重启系统", ["shutdown", "--action", "restart"]), ("有序关机", ["shutdown", "--action", "shutdown"])] {
+            let gateReport = (try? Command.checked(CLI.gateBinary, ["status", "--json"], timeout: 3))
+                .flatMap { try? JSON.decode(GateStatusReport.self, from: Data($0.utf8)) }
+            let gateTitle = gateReport?.menuTitle(guardAllowed: status.state == "allowed" && status.firewallVerified) ?? "🟠 状态待验证"
+            lines.append("SurgeGate · \(gateTitle)" + parentStyle)
+            lines.append("-- 电源操作 · 先保存应用会话" + parentStyle + " size=13")
+            for (title, action, color) in [("🔄 有序重启电脑（保存会话）", "restart", "#1D4ED8,#93C5FD"),
+                                           ("⏻ 有序关机（保存会话）", "shutdown", "#B91C1C,#FCA5A5")] {
+                lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) param1=shutdown param2=--action param3=\(action) terminal=true refresh=true color=\(color) size=14")
+            }
+            lines.append("-- 有未保存内容时请处理应用提示；超时会中止 | color=#595959,#C7C7CC size=12")
+            lines.append("-----")
+            lines.append("-- 管理与日志" + parentStyle + " size=13")
+            for (title, args) in [("📄 查看 SurgeGate 日志", ["logs"]), ("🔄 重启 SurgeGate 服务", ["restart"]), ("⚙️ 编辑应用配置", ["edit-config"])] {
                 lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) " + args.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true")
             }
         } else {

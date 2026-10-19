@@ -154,6 +154,8 @@ scripts/install-user.sh --menu-only
 
 菜单区分放行、阻断、手动解除、停止和未知；展示检查时间、规则结果、具体原因、SurgeGate
 状态，并提供日志、诊断、规则草稿、重启和临时恢复入口。采用系统文字颜色和明暗双配色。
+显示名为 `SurgeGuard`。SurgeGate 只有在服务运行、状态新鲜、已就绪、无待恢复应用且系统门禁
+已验证放行时才显示绿色；等待／过期为橙色，错误为红色。
 
 SurgeGate 本轮已改为同包 Swift 程序，无需 Python。它只相信近期有效的系统守护状态，
 不会使用“代理端口通＋任意 utun”的备用判定。启动 Surge 后等待就绪，不自动更改增强模式偏好或分流选择。
@@ -176,6 +178,9 @@ SurgeGate 本轮已改为同包 Swift 程序，无需 Python。它只相信近�
 
 ## 有序关机／重启
 
+SwiftBar → **SurgeGate** 菜单最上方是电源操作：蓝色“有序重启电脑”和红色“有序关机”；
+下方分隔线之后是日志和服务管理。
+
 ```sh
 "$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" shutdown --action restart
 # 或 --action shutdown
@@ -186,6 +191,11 @@ SurgeGate 本轮已改为同包 Swift 程序，无需 Python。它只相信近�
 有未保存内容时由应用显示正常提示，拒绝／超时就中止；不使用 SIGKILL、宽泛 pkill，
 也不修改系统全局恢复设置。最后一步可能需要系统自动化权限。
 它不拦截所有 Apple 菜单关机、断电或内核故障。
+
+关机后再开机，系统级守护由 LaunchDaemon 自动加载；登录用户账户后，SurgeGate 的
+`RunAtLoad`／`KeepAlive` LaunchAgent 自动运行，启动 Surge，等待系统门禁放行后恢复应用。
+其他登录项可能自行启动，其网络由系统守护控制。断电恢复基于最近一次约 30 秒间隔的应用快照，
+应用文档／窗口恢复由各应用负责；开机最早阶段的限制仍见 README 的 Limits。
 
 ## 排查与管理
 

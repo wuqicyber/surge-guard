@@ -108,3 +108,27 @@ public struct GateSession: Codable {
         return result
     }
 }
+
+public struct GateStatusReport: Decodable {
+    public let running: Bool
+    public let fresh: Bool
+    public let status: State
+    public struct State: Decodable {
+        public let state: String
+        public let pending: [String]
+    }
+
+    public func menuTitle(guardAllowed: Bool) -> String {
+        guard running, fresh else { return "🟠 状态待验证" }
+        switch status.state {
+        case "ready":
+            guard guardAllowed else { return "🟠 等待网络门禁" }
+            return status.pending.isEmpty ? "🟢 已就绪" : "🟠 恢复应用中（\(status.pending.count) 个待恢复）"
+        case "restoring": return "🟠 恢复应用中（\(status.pending.count) 个待恢复）"
+        case "waiting": return "🟠 等待网络门禁"
+        case "error": return "🔴 服务异常，请查看日志"
+        case "shutting_down": return "🟠 正在有序关机 / 重启"
+        default: return "🟠 状态待验证"
+        }
+    }
+}
