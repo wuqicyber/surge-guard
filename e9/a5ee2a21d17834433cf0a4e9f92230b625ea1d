@@ -1,0 +1,75 @@
+.github/workflows/check.yml
+  s_d1ba28721726a9::t_1ef267869f74cd 25-26
+AGENTS.md
+  s_d1ba28721726a9::t_93ef6ca673321e 30-34
+README.md
+  s_d1ba28721726a9::t_111cc36ecffde4 30-32,122-133,155-162,172-186,284-286
+README.zh-CN.md
+  s_d1ba28721726a9::t_07739fda8c8d0c 19,82-91,111-114,117,120-134
+Sources/SurgeGuard/Admin.swift
+  s_d1ba28721726a9::t_a71544a98a4b32 54-58,60-77,79-81,83-95,97,101-153,177,191-192,196
+Sources/SurgeGuard/CLI.swift
+  s_1aab1634823991::t_a6b5af97d4a28d 20-22,145,149-150,153-155,157-163,170
+Sources/SurgeGuard/Recovery.swift
+  s_d1ba28721726a9::t_293e06c1407992 1-79
+Sources/SurgeGuard/SwiftBar.swift
+  s_feb680f5d77ef5::t_e320ca4fbdbe5a 13-16,20,22,24,29-42,47,49-68,75-80
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_feb680f5d77ef5::t_50bf7d24279317 62-65
+Sources/SurgeGuardCore/Firewall.swift
+  s_d1ba28721726a9::t_fec720ecf3e3e7 15,63,65,67-68,70-80
+Sources/SurgeGuardCore/LogReader.swift
+  s_d1ba28721726a9::t_0a1ebfd066d45f 44-46,72-73
+Sources/SurgeGuardCore/Recovery.swift
+  s_d1ba28721726a9::t_f5ce61a55c4385 1-21
+Tests/SurgeGuardTests/main.swift
+  s_feb680f5d77ef5::t_28b39fbb9099f5 3,17-108,171-181
+docs/acceptance.md
+  s_feb680f5d77ef5::t_2cf9fab278ecfa 55-65
+docs/incidents/update-lock-race.md
+  s_feb680f5d77ef5::t_860d7456aa018f 1-43
+docs/troubleshooting.md
+  s_feb680f5d77ef5::t_0e36d3edeacee2 24,75-93
+docs/verification.md
+  s_feb680f5d77ef5::t_1bdae6f926aa00 84-118
+integrations/swiftbar/surge-guard-action.sh
+  s_feb680f5d77ef5::t_32cc4d743d5116 1-93
+scripts/check.sh
+  s_d1ba28721726a9::t_e75b9d0a8241b8 14-15
+scripts/install-user.sh
+  s_feb680f5d77ef5::t_2edd8b13f79afe 12-13,17,21-31,33-42
+integrations/swiftbar/surge-guard.5s.sh
+  s_feb680f5d77ef5::t_4db8e853511135 7-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "e9a5ee2a21d17834433cf0a4e9f92230b625ea1d",
+  "prompts": {},
+  "sessions": {
+    "s_1aab1634823991": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50870fb2-78c2-4dff-b971-715aef6f3a0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_d1ba28721726a9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6497df62-940e-486e-9426-4f023662bc66",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
