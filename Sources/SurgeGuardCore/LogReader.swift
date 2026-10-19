@@ -17,6 +17,18 @@ public enum LogReader {
                       "the global IPv6 route is not owned by Surge": "IPv6 主路由未由 Surge 接管"]
         return message.components(separatedBy: "; ").map { part in
             guard let key = labels.keys.first(where: { part == $0 || part.hasPrefix($0 + ":") }) else { return text(part) }
+            if key == "rule_probe_failed" {
+                let cause: String
+                if part.contains("Surge isn't running on the local machine") { cause = "Surge CLI 暂时无法连接本机 Surge" }
+                else if part.contains("timed out") { cause = "Surge CLI 查询超时" }
+                else {
+                    let last = part.components(separatedBy: .newlines).last ?? part
+                    let brief = last.replacingOccurrences(of: "surge-guard: ", with: "")
+                        .components(separatedBy: " UserInfo=")[0]
+                    cause = String(text(brief).prefix(240)) + "（完整错误见 --json）"
+                }
+                return labels[key]! + " [\(key)]：" + cause
+            }
             return labels[key]! + " [\(key)]" + text(String(part.dropFirst(key.count)))
         }.joined(separator: "; ")
     }
@@ -80,7 +92,13 @@ public enum LogReader {
             lines.append("  影响：应用恢复暂停；这条日志本身不能判定网络已断开")
             lines.append("  处理：待读取恢复后继续；持续出现时查看完整诊断")
         } else if event == "gate_status_recovered" {
-            lines.append("  状态：系统门禁报告已恢复，按当前放行状态继续")
+            lines.append(details["guard_state"] as? String == "allowed" ? "  状态：系统门禁读取已恢复，可以继续恢复应用" : "  状态：系统门禁读取已恢复，当前未放行，应用恢复仍暂停")
+        } else if event == "gate_waiting" || (event == "gate_state" && ["blocked:", "stopped:", "unlocked:"].contains(where: { message.hasPrefix($0) })) {
+            let state = details["guard_state"] as? String ?? String(message.prefix(while: { $0 != ":" }))
+            let cause = details["reason"] as? String ?? message.split(separator: ":", maxSplits: 1).dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
+            let states = ["blocked": "系统门禁已阻断", "stopped": "未验证到运行中的系统守护", "unlocked": "系统保护已手动解除"]
+            lines.append("  状态：\(states[state] ?? "等待系统门禁")，应用恢复暂停")
+            if !cause.isEmpty { lines.append("  原因：\(reason(cause))") }
         } else if event == "gate_ready" || legacyProgress == 0 {
             lines.append("  状态：应用恢复完成，等待后续状态变化")
         } else if event == "gate_restore_progress" || legacyProgress != nil {

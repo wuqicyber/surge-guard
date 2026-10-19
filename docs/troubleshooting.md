@@ -17,6 +17,10 @@ Human output names the component and explains cause, effect, remaining apps and
 recovery. Raw OS errors, event codes and process/run IDs remain in JSON. The
 SwiftBar bridge uses privileged fixed-file reads and unprivileged formatting,
 including for historical events. Its formatter is `surge-guard format-logs`.
+Nested helper errors are summarized in human output. A temporary inability to
+connect to Surge CLI is shown as such, with restoration paused while blocked;
+the original helper stderr remains in JSON. Do not hide that failure with green
+status or treat it as evidence that the signed Surge process necessarily exited.
 Old plain-text records stay readable and get a JSON wrapper in machine mode.
 Following the log need not print anything new while conditions stay unchanged.
 Each component keeps only its current log and one `.1` predecessor, each at most
@@ -45,6 +49,7 @@ Never make the private directory world-readable to simplify menu access.
 | Enhanced mode unavailable | Signature/extension/VIF/default-route/IPv6 fields | Start Enhanced Mode, inspect competing VPNs/routes and rerun the condition probe. |
 | Menu has two Surge sections | Existing combined plugin and standalone plugin | Use `install-user.sh --menu-only`, remove the standalone copy and call the renderer once from the combined menu. |
 | Parent menu turns grey after a status change on SwiftBar 2.1.1 | Current isolated renderer and the installed user renderer version | Refresh the updated renderer. Parent entries carry primary light/dark colors to preserve SwiftBar's action during incremental submenu updates; changing PF or restarting the guard is unnecessary. |
+| Emergency action reports it cannot inspect the guard service/PID | launchctl query error, authentication and expected job state | Restore query access and retry. It deliberately refuses to clear rules when absence/exit cannot be established. Only the specific missing-service result is absence; the action and log readers do not invoke the guard binary for help. |
 
 ## SurgeGate
 

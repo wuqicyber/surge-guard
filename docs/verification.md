@@ -256,3 +256,41 @@ acceptance items above remain unperformed.
   existing policy before applying group-only JSON. Fresh installs can configure
   the new format before the first start. No PF changes or service restart were
   performed during these checks.
+
+## Post-merge review and offline recovery hardening — 2026-10-19
+
+- Verified that the operator has now installed the group-only system build:
+  installed and local release hashes matched at review start, the fresh daemon
+  fingerprint matches the private group-only configuration, all six readiness
+  checks pass and the companion reports fresh ready with no pending apps.
+  Earlier sections' pending root deployment describes their original phase,
+  not the current machine state.
+- Read the policy/parser/result-binding, freshness, command cleanup, installer,
+  recovery, logging and user-session flows again. Found and reproduced two
+  shell recovery gaps using fake tools: it called guard help even for independent
+  actions, and unexpected service-query failures were treated as absence. The
+  pre-fix regression failed both independence and no-flush assertions. The fixed
+  script skips capability queries for emergency/log actions, rejects unknown
+  inspections or a running job without a valid PID, and retains known-absent
+  service recovery. No test invoked live sudo, PF or power operations.
+- Live read-only observations: 246,810 status-file reads over four seconds
+  produced no non-0644 mode, permission failure or incomplete JSON. The companion
+  had four numeric descriptors after approximately 38 minutes of continuous
+  operation. This is a sampled observation, not an exhaustive uptime guarantee.
+- The companion recorded one real upstream CLI-unavailable transition to blocked
+  and then ready approximately one second later. No deliberate Surge toggle was
+  issued. This confirms a reported fail-closed transition and recovery; it is not
+  controlled packet/latency acceptance. Human logs now summarize nested helper
+  stderr into a clear CLI cause and paused-restoration state, while JSON retains
+  the complete diagnostic record. Added root and companion rendering regressions.
+- All 30 standalone groups, both warnings-as-errors release builds and shell
+  checks pass. Backed up user components, updated the recovery helper/renderer
+  and native log viewer through the user installer, and refreshed SwiftBar.
+  System daemon control logic and the live policy were not changed by this review.
+  The formatter change in the shared library is deployed in user-facing readers;
+  the installed system executable remains the already-verified group-only build.
+
+Private root PF/log inspection was unavailable without an interactive sudo
+credential. The read-only daemon report supplies recent root-owned PF audit
+results. Deliberate failure/traffic blocking, real emergency unlock, automatic
+rollback, sleep, power loss and OS shutdown acceptance remain unperformed.
