@@ -1,0 +1,21 @@
+Sources/SurgeGuardCore/EgressObservation.swift
+  s_feb680f5d77ef5::t_44e272779e49f9 67
+Tests/SurgeGuardTests/main.swift
+  s_feb680f5d77ef5::t_48271a06970341 39-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "8befe701f9f509e8f8f262cff5c805d162f8f2e8",
+  "prompts": {},
+  "sessions": {
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
