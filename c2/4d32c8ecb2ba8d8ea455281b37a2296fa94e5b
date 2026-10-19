@@ -1,0 +1,67 @@
+.github/workflows/check.yml
+  s_1aab1634823991::t_163ca7c6284e95 23
+AGENTS.md
+  s_d1ba28721726a9::t_6261dd5108c389 28-41
+README.md
+  s_d1ba28721726a9::t_57aa9c68e2be49 287,306-313,318-320,322-325,328-338,340-346
+README.zh-CN.md
+  s_feb680f5d77ef5::t_d747cae31c20df 212-220,227-233
+Sources/SurgeGate/main.swift
+  s_d1ba28721726a9::t_9d47d80225da5d 6,9-11,13-14,28-29,41,117,155,157-159,169,172-183,283
+Sources/SurgeGuard/CLI.swift
+  s_1aab1634823991::t_d8096b49af16d9 24,101-102,137
+Sources/SurgeGuardCore/AtomicFile.swift
+  s_d1ba28721726a9::t_311e98a1e651ed 1-18
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_feb680f5d77ef5::t_f2213676ff6c11 67-74,79,94-102,115,123
+Sources/SurgeGuardCore/EventFile.swift
+  s_d1ba28721726a9::t_26d9273868f81a 1-43
+Sources/SurgeGuardCore/Firewall.swift
+  s_d1ba28721726a9::t_895a230ceb7542 45
+Sources/SurgeGuardCore/GateConfiguration.swift
+  s_1aab1634823991::t_b0ecfa2601785f 32,128
+docs/incidents/command-pipe-leak.md
+  s_d1ba28721726a9::t_ca3a1f631a5b06 1-33
+docs/troubleshooting.md
+  s_d1ba28721726a9::t_18d4d497124e9a 16-19,21-26,32,35,57-58
+integrations/swiftbar/surge-guard-action.sh
+  s_d1ba28721726a9::t_31b4ee96e1c342 1,3,9-10,17,42,50-58
+scripts/check.sh
+  s_d1ba28721726a9::t_329b0d764fdf60 12
+Sources/SurgeGuardCore/System.swift
+  s_feb680f5d77ef5::t_11abbd231e078f 21-27,38-43,49
+docs/incidents/status-permission-window.md
+  s_feb680f5d77ef5::t_b5577c9a0d636a 1-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "c24d32c8ecb2ba8d8ea455281b37a2296fa94e5b",
+  "prompts": {},
+  "sessions": {
+    "s_1aab1634823991": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50870fb2-78c2-4dff-b971-715aef6f3a0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_d1ba28721726a9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6497df62-940e-486e-9426-4f023662bc66",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
