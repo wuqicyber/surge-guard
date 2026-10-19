@@ -325,6 +325,9 @@ rollback, sleep, power loss and OS shutdown acceptance remain unperformed.
   retaining its backup. The isolated combined-section output has the new manual
   egress action and both recovery entries. Refreshed SwiftBar without restarting
   either service. Existing private plugin content was not executed or published.
+- Hosted checks using macos-14 remained queued during its announced October 19
+  retirement brownout. Moved the existing job to macos-15 without changing its
+  test/build steps; see the [runner retirement announcement](https://github.com/actions/runner-images/issues/13518).
 
 The system daemon has not been replaced during this phase: non-interactive sudo
 is unavailable and interactive administrator verification was not completed.
