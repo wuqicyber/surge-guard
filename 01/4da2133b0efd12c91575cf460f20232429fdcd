@@ -1,0 +1,37 @@
+AGENTS.md
+  s_feb680f5d77ef5::t_707e4ec9c10e9e 24-28
+README.md
+  s_feb680f5d77ef5::t_e0002578e36c8a 85,97,105-112,143-144,151-161
+README.zh-CN.md
+  s_feb680f5d77ef5::t_308a1e8702109f 64,71-75,104-114
+Sources/SurgeGuard/main.swift
+  s_feb680f5d77ef5::t_1e068e282416ee 99
+Sources/SurgeGuardCore/Configuration.swift
+  s_feb680f5d77ef5::t_35e0c01320f7b8 7,9,14-19,48-55,70-74,126,128
+Tests/SurgeGuardTests/main.swift
+  s_feb680f5d77ef5::t_6215ee84507418 220-242
+docs/acceptance.md
+  s_feb680f5d77ef5::t_d7d7b933f979cc 32-33
+docs/troubleshooting.md
+  s_feb680f5d77ef5::t_6f377889c72b19 42-43
+docs/verification.md
+  s_feb680f5d77ef5::t_440480c787a9ac 237-258
+examples/routes.json
+  s_feb680f5d77ef5::t_7100c09d92228f 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "014da2133b0efd12c91575cf460f20232429fdcd",
+  "prompts": {},
+  "sessions": {
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
