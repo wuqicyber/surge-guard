@@ -51,6 +51,9 @@ Read README.md first. It is the operational contract for all three components.
   for actual lock/PID release, back up before replacement, verify fresh PF status
   after startup and attempt rollback on update failure. Never fix this with sleeps
   of a guessed duration or repeated forced restarts. Recovery must work offline.
+- Independent emergency/log actions must not query the guard executable, even
+  for help/capabilities. A service-query error is not service absence: refuse
+  anchor clearing on unexpected errors or a running job without a valid PID.
 - Document the reactive/early-boot limitations accurately. Do not market this
   external gate as guaranteed packet-by-packet enforcement.
 

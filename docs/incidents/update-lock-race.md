@@ -41,3 +41,12 @@ while the old PID stays alive. No test mutates live PF or restarts the Mac.
 
 Privileged update/automatic rollback and real SwiftBar interaction still need
 the live acceptance procedure. Source checks alone do not certify that handoff.
+
+Later recovery review found two shell-level gaps: the independent emergency/log
+actions still queried the guard's help before dispatch, and service_pid masked
+all launchctl errors as an absent job. A broken/hung binary could hold up the
+escape hatch; a failed inspection could skip the PID wait and clear rules while
+the owner was unknown. Fake-tool regressions reproduced both gaps before the
+fix. Independent actions now skip binary capability probing, and unexpected
+query errors or a running job with a missing/invalid PID fail before clearing.
+The specific missing-service response still permits offline emergency removal.

@@ -14,7 +14,24 @@ if [ "$(id -u)" -eq 0 ]; then printf '%s\n' 'Run this menu action as your normal
 if [ "$action" = open-surge ]; then exec /usr/bin/open -a Surge; fi
 
 service_pid() {
-    sudo -n /bin/launchctl print "system/$label" 2>/dev/null | /usr/bin/awk '/^[[:space:]]*pid =/ {print $3; exit}' || true
+    local service_text query_status pid
+    if service_text=$(sudo -n /bin/launchctl print "system/$label" 2>&1); then
+        pid=$(printf '%s\n' "$service_text" | /usr/bin/awk '/^[[:space:]]*pid =/ {print $3}')
+        case "$pid" in
+            '')
+                if [[ "$service_text" = *'state = running'* ]]; then
+                    printf '%s\n' 'Cannot confirm the running guard PID; refusing recovery.' >&2
+                    return 1
+                fi ;;
+            *[!0-9]*|0) printf '%s\n' 'Invalid guard PID; refusing recovery.' >&2; return 1 ;;
+        esac
+        printf '%s\n' "$pid"
+    else
+        query_status=$?
+        if [ "$query_status" -eq 113 ] && [[ "$service_text" = *'Could not find service'* ]]; then return 0; fi
+        printf 'Cannot inspect guard service (status %s); refusing recovery: %s\n' "$query_status" "$service_text" >&2
+        return 1
+    fi
 }
 wait_exit() {
     old_pid=$1
@@ -30,14 +47,19 @@ wait_exit() {
     done
 }
 
-help_text=$("$guard_bin" --help 2>/dev/null || true)
-case "$help_text" in *restore-policy*) modern=1 ;; *) modern=0 ;; esac
+modern=0
 case "$action" in
-    backup|rollback|restore-policy)
-        if [ "$modern" -ne 1 ]; then
-            printf '%s\n' 'The installed legacy guard has no trusted backup/rollback commands. Upgrade only after this recovery menu is present.' >&2
-            exit 1
-        fi ;;
+    unlock|logs|follow-logs) ;; # Independent actions must never invoke a broken/hung guard binary.
+    *)
+        help_text=$("$guard_bin" --help 2>/dev/null || true)
+        case "$help_text" in *restore-policy*) modern=1 ;; esac
+        case "$action" in
+            backup|rollback|restore-policy)
+                if [ "$modern" -ne 1 ]; then
+                    printf '%s\n' 'The installed legacy guard has no trusted backup/rollback commands. Upgrade only after this recovery menu is present.' >&2
+                    exit 1
+                fi ;;
+        esac ;;
 esac
 printf 'surge-guard · %s\n' "$action"
 case "$action" in

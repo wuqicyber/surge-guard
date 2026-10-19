@@ -101,6 +101,9 @@ do {
           sudo) case "$1" in -v) exit 0 ;; -n) shift ;; esac; exec "$@" ;;
           guard) case "$1" in --help) echo legacy ;; check) exit 0 ;; esac ;;
           launchctl)
+            if [ "$1" = print ] && [ -f '\(directory)/query-failed' ]; then echo 'Service query failed' >&2; exit 5; fi
+            if [ "$1" = print ] && [ -f '\(directory)/missing-pid' ]; then echo 'state = running'; exit 0; fi
+            if [ "$1" = print ] && [ -f '\(directory)/absent' ]; then echo 'Could not find service' >&2; exit 113; fi
             case "$1" in
               print) if [ -f '\(directory)/stopped' ]; then exit 1; fi; if [ -f '\(directory)/restarted' ]; then echo 'pid = 5678'; else echo 'pid = 1234'; fi ;;
               bootout) touch '\(directory)/stopped' ;;
@@ -152,11 +155,33 @@ do {
         try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
         let refused = try Command.run("/bin/sh", [testScript, "unlock"], timeout: 10)
         try check(refused.status != 0 && !String(contentsOfFile: directory + "/calls").contains("-F rules"), "Recovery cleared rules while old daemon was alive")
+        try FileManager.default.removeItem(atPath: directory + "/stuck")
+        try FileManager.default.removeItem(atPath: directory + "/stopped")
+        try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+        let independent = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
+        let independentCalls = try String(contentsOfFile: directory + "/calls")
+        let binaryIndependent = independent.status == 0 && !independentCalls.contains("guard --help")
+        try "".write(toFile: directory + "/query-failed", atomically: true, encoding: .utf8)
+        try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+        let failedQuery = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
+        let failedQueryCalls = try String(contentsOfFile: directory + "/calls")
+        let queryFailureSafe = failedQuery.status != 0 && !failedQueryCalls.contains("-F rules")
+        try check(binaryIndependent && queryFailureSafe, "Recovery depends on guard help or flushes after an unknown query: binaryIndependent=\(binaryIndependent), queryFailureSafe=\(queryFailureSafe)")
+        try FileManager.default.removeItem(atPath: directory + "/query-failed")
+        try "".write(toFile: directory + "/missing-pid", atomically: true, encoding: .utf8)
+        try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+        let missingPID = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
+        try check(missingPID.status != 0 && !String(contentsOfFile: directory + "/calls").contains("-F rules"), "Recovery flushed without a known running PID")
+        try FileManager.default.removeItem(atPath: directory + "/missing-pid")
+        try "".write(toFile: directory + "/absent", atomically: true, encoding: .utf8)
+        let absent = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
+        try check(absent.status == 0, "Known missing service blocked independent recovery")
         try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
         let logBridge = try Command.run("/bin/bash", [testScript, "logs"], timeout: 10)
         let logCalls = try String(contentsOfFile: directory + "/calls")
         try check(logBridge.status == 0 && logBridge.output.contains("rendered: {") && logCalls.contains("renderer format-logs"), "System log reader bypassed the user formatter")
         try check(logCalls.contains("sudo \(directory)/tail -n 200 /private/var/db/surge-guard/events.log") && !logCalls.contains("sudo \(rendererPath)"), "User formatter was invoked with sudo")
+        try check(!logCalls.contains("guard --help"), "Independent log access queried the potentially broken guard executable")
         try "".write(toFile: directory + "/tail-failed", atomically: true, encoding: .utf8)
         try check(try Command.run("/bin/bash", [testScript, "logs"], timeout: 10).status != 0, "Log pipeline concealed a failed privileged reader")
         let plugin = try String(contentsOf: project.appendingPathComponent("integrations/swiftbar/surge-guard.5s.sh"))
@@ -166,6 +191,7 @@ do {
         try check(fallback.contains("param1=unlock") && !fallback.contains("---"), "Missing independent fallback when renderer is absent")
     }
     print("PASS: offline legacy recovery waits for exit and refuses to flush while daemon remains alive")
+    print("PASS: emergency recovery avoids the guard executable and refuses unknown queries or missing running PIDs")
     print("PASS: SwiftBar log bridge formats without sudo and propagates privileged-reader failure")
 
     for mask in 0..<64 {
@@ -315,6 +341,15 @@ do {
     try check(LogReader.format(progress).contains("剩余 1 个应用"), "Legacy progress was not explained")
     let recovered = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "gate_status_recovered", "component": "SurgeGate", "details": ["pending_count": 0, "guard_state": "allowed"]]), as: UTF8.self)
     try check(LogReader.format(recovered).contains("已恢复") && LogReader.format(recovered).contains("剩余 0 个应用"), "Recovery state is not clear")
+    let nestedFailure = "rule_probe_failed: /bin/launchctl asuser 501 helper failed: raw-helper-error\nsurge-guard: surge-cli --raw status failed: Surge isn't running on the local machine. Use --remote to specify a remote target."
+    let waitingRecord: [String: Any] = ["component": "SurgeGate", "event": "gate_waiting", "message": "blocked: " + nestedFailure,
+                                       "details": ["guard_state": "blocked", "reason": nestedFailure, "pending_count": 0]]
+    let waitingLine = String(decoding: try JSONSerialization.data(withJSONObject: waitingRecord), as: UTF8.self)
+    let waitingLog = LogReader.format(waitingLine)
+    try check(waitingLog.contains("系统门禁已阻断") && waitingLog.contains("恢复暂停") && waitingLog.contains("Surge CLI 暂时无法连接"), "Waiting log omitted actual CLI cause and paused state")
+    try check(!waitingLog.contains("asuser") && !waitingLog.contains("raw-helper-error") && LogReader.format(waitingLine, json: true).contains("raw-helper-error"), "Nested helper diagnostics polluted the human log or vanished from JSON")
+    let failedProbe = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "rule_probe_failed", "message": nestedFailure]), as: UTF8.self)
+    try check(LogReader.format(failedProbe).contains("Surge CLI 暂时无法连接") && !LogReader.format(failedProbe).contains("raw-helper-error"), "Root probe failure retained nested command noise")
     try check(readable.contains("SurgeGuard") && readable.contains("普通联网已阻断") && readable.contains("最终策略"), "System log lacks component/state/route context")
     print("PASS: both components explain state, cause, impact, progress and recovery; JSON retains raw diagnostics")
     _ = try JSONSerialization.jsonObject(with: Data(LogReader.format("legacy event", json: true).utf8))
