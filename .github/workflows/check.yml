@@ -20,6 +20,7 @@ jobs:
           .build/release/surge-guard validate examples/enhanced.json
           .build/release/surge-guard validate examples/routes.json
           .build/release/surge-guard swiftbar --section
+          printf '%s\n' '{"event":"gate_state","app":"","message":"1 application(s) pending"}' | .build/release/surge-guard format-logs | grep -q '剩余 1 个应用'
           sh -n scripts/install-user.sh
           sh -n integrations/swiftbar/surge-guard.5s.sh
           sh -n integrations/swiftbar/surge-guard-action.sh

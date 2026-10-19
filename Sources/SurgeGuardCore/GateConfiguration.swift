@@ -29,8 +29,7 @@ public enum UserPaths {
         if lstat(path, &info) == 0 {
             guard info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG else { throw GuardError("Unsafe user state file") }
         }
-        try text.write(toFile: path, atomically: true, encoding: .utf8)
-        guard chmod(path, 0o600) == 0 else { throw GuardError("Cannot protect user state file") }
+        try AtomicFile.write(text, to: path, mode: 0o600)
     }
 }
 
@@ -126,6 +125,7 @@ public struct GateStatusReport: Decodable {
             return status.pending.isEmpty ? "🟢 已就绪" : "🟠 恢复应用中（\(status.pending.count) 个待恢复）"
         case "restoring": return "🟠 恢复应用中（\(status.pending.count) 个待恢复）"
         case "waiting": return "🟠 等待网络门禁"
+        case "unknown": return "🟠 门禁状态读取异常"
         case "error": return "🔴 服务异常，请查看日志"
         case "shutting_down": return "🟠 正在有序关机 / 重启"
         default: return "🟠 状态待验证"

@@ -25,6 +25,20 @@ Read README.md first. It is the operational contract for all three components.
   user scripts or configured shell commands as root.
 - A condition check is not a claim that PF is active. A cached status must be
   bound to the current boot, process and monotonic freshness limits.
+- Set state-file permissions on the staged inode before publishing with rename.
+  Foundation atomic rewrite followed by chmod can briefly publish 0600 under a
+  daemon umask of 077. Use AtomicFile through the owner-validating wrappers;
+  retain the concurrent permission/content regression test.
+- Keep human logs clear about component, state, cause, impact and recovery.
+  Status-read failure does not establish a network outage. Preserve raw error,
+  event and process fields in JSON. SwiftBar's user-owned formatter must stay
+  unprivileged; only the fixed log-reading command receives sudo.
+- Command must explicitly close every pipe end, including unused stdin pipes,
+  on success, failed launch and timeout. Keep repeated-call descriptor checks.
+  A failed service query is unknown, never evidence the daemon stopped.
+- Both event logs use EventFile: current plus one previous file, each at most
+  1 MiB, with private ownership/permissions and a writer lock. Do not add
+  unbounded service stdout/stderr files or log every unchanged polling tick.
 - SurgeGate must consume verified daemon status, not proxy-port/utun guesses.
   Do not reintroduce force-kill, `pkill -f`, or success messages after app errors.
 - Install/verify the independent SwiftBar recovery menu before privileged changes.

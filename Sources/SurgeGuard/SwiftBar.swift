@@ -23,10 +23,16 @@ enum SwiftBar {
             lines.append("-- 配置：\(snapshot.configurationMode == "routes" ? "增强模式 + 分流检查" : "增强模式")" + parentStyle)
             lines.append("-- 增强模式检查：\(current ? (snapshot.readiness?.ready == true ? "就绪" : "未就绪") : "历史结果，待重新验证")" + parentStyle)
             for route in snapshot.session?.routes ?? [] {
-                lines.append("-- \(current ? (route.ready ? "🟢" : "🔴") : "🟠") 分流\(current ? "检查" : "历史记录")：\(clean(route.url)) → \(clean(route.finalPolicy ?? "未知"))" + parentStyle)
+                lines.append("-- \(current ? (route.ready ? "🟢" : "🔴") : "🟠") 分流\(current ? "规则" : "历史记录")：\(clean(route.url)) → \(clean(route.finalPolicy ?? "未知"))" + parentStyle)
             }
-            let age = max(0, Int(Date().timeIntervalSince(snapshot.checkedAt)))
-            lines.append("-- 最近检查：\(age) 秒前 · PF 状态为最近验证结果 | color=#595959,#C7C7CC size=12")
+            if snapshot.configurationMode == "routes" { lines.append("-- 只查询规则策略，不向目标发起网络请求 | color=#595959,#C7C7CC size=12") }
+            let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
+            let age = max(0, Int(SystemClock.seconds - snapshot.checkedUptime))
+            let pfAge = max(0, Int(SystemClock.seconds - snapshot.firewallVerifiedUptime))
+            let ageText = age == 0 ? "不到 1 秒前" : "\(age) 秒前"
+            lines.append("-- 状态发布：\(formatter.string(from: snapshot.checkedAt))（\(ageText)） | color=#595959,#C7C7CC size=12")
+            lines.append("-- PF 最近验证：\(pfAge == 0 ? "不到 1 秒前" : "\(pfAge) 秒前") · 约每 5 秒校验 | color=#595959,#C7C7CC size=12")
+            lines.append("-- 以上时间为菜单生成时记录，展开后不逐秒更新 | color=#595959,#C7C7CC size=12")
         }
         if !modern, status.daemonRunning {
             lines.append("-- 旧版守护正在运行，PF 状态尚未验证 | color=#92400E,#FCD34D size=12")
@@ -38,7 +44,7 @@ enum SwiftBar {
         let renderer = CLI.userDirectory.appendingPathComponent("bin/surge-guard-ui").path
         let normalBinary = FileManager.default.isExecutableFile(atPath: renderer) ? renderer : Paths.binary
         func command(_ title: String, _ args: [String], root: Bool = false, depth: String = "--") {
-            let recoverable = root && args.count == 1 && ["start", "restart", "unlock", "backup", "rollback", "restore-policy", "logs", "doctor"].contains(args[0]) && FileManager.default.isExecutableFile(atPath: actionHelper)
+            let recoverable = root && args.count == 1 && ["start", "restart", "unlock", "backup", "rollback", "restore-policy", "logs", "follow-logs", "doctor"].contains(args[0]) && FileManager.default.isExecutableFile(atPath: actionHelper)
             let executable = recoverable ? actionHelper : root ? "/usr/bin/sudo" : normalBinary
             let parameters = (root && !recoverable ? [Paths.binary] : []) + args
             lines.append("\(depth) \(title) | bash=\(parameter(executable)) " + parameters.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true")
@@ -46,7 +52,8 @@ enum SwiftBar {
         command("重新检查条件", ["check"])
         command("查看完整诊断", ["doctor"], root: true)
         command("查看最近 200 条日志", ["logs"], root: true)
-        if modern { command("实时跟踪日志", ["logs", "--follow"], root: true) }
+        if FileManager.default.isExecutableFile(atPath: actionHelper) { command("实时跟踪日志", ["follow-logs"], root: true) }
+        else if modern { command("实时跟踪日志", ["logs", "--follow"], root: true) }
         command("编辑规则草稿", ["edit-config"])
         if modern { command("验证并应用规则草稿", ["configure", CLI.draft], root: true) }
         else { lines.append("-- 当前为旧版系统守护：分流门禁及备份命令尚未启用 | color=#92400E,#FCD34D size=12") }
@@ -74,15 +81,15 @@ enum SwiftBar {
             let gateTitle = gateReport?.menuTitle(guardAllowed: status.state == "allowed" && status.firewallVerified) ?? "🟠 状态待验证"
             lines.append("SurgeGate · \(gateTitle)" + parentStyle)
             lines.append("-- 电源操作 · 先保存应用会话" + parentStyle + " size=13")
-            for (title, action, color) in [("🔄 有序重启电脑（保存会话）", "restart", "#1D4ED8,#93C5FD"),
-                                           ("⏻ 有序关机（保存会话）", "shutdown", "#B91C1C,#FCA5A5")] {
-                lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) param1=shutdown param2=--action param3=\(action) terminal=true refresh=true color=\(color) size=14")
+            for (title, action, color, symbol) in [("有序重启电脑（保存会话）", "restart", "#1D4ED8,#93C5FD", "arrow.clockwise"),
+                                                   ("有序关机（保存会话）", "shutdown", "#B91C1C,#FCA5A5", "power")] {
+                lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) param1=shutdown param2=--action param3=\(action) terminal=true refresh=true color=\(color) size=14 sfimage=\(symbol) width=16 height=16")
             }
             lines.append("-- 有未保存内容时请处理应用提示；超时会中止 | color=#595959,#C7C7CC size=12")
             lines.append("-----")
             lines.append("-- 管理与日志" + parentStyle + " size=13")
-            for (title, args) in [("📄 查看 SurgeGate 日志", ["logs"]), ("🔄 重启 SurgeGate 服务", ["restart"]), ("⚙️ 编辑应用配置", ["edit-config"])] {
-                lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) " + args.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true")
+            for (title, args, symbol) in [("查看 SurgeGate 日志", ["logs"], "doc.text"), ("实时跟踪 SurgeGate 日志", ["logs", "--follow"], "waveform"), ("重启 SurgeGate 服务", ["restart"], "arrow.triangle.2.circlepath"), ("编辑应用配置", ["edit-config"], "gearshape")] {
+                lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) " + args.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true size=14 sfimage=\(symbol) width=16 height=16")
             }
         } else {
             let legacyGate = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".surge_gate/surge_gate.py").path

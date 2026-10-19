@@ -21,6 +21,7 @@ enum CLI {
       sudo rollback                   Restore the last update backup and restart the service
       sudo restore-policy             Restore the policy saved before the last configure
       sudo logs [--follow] [--json]    Readable recent events; optional follow or JSON Lines
+      format-logs [--json]             Render log records from stdin without privileges
       sudo unlock                     Stop and remove this gate; reboot/start re-arms it
       sudo uninstall                  Remove installed system components; retain configuration/logs
 
@@ -97,8 +98,8 @@ enum CLI {
                 else if option == "--json", action == "check" { index += 1 }
                 else { throw GuardError("Unknown or incomplete option: \(option)") }
             }
-        } else if ["status", "swiftbar"].contains(action) {
-            let optional = ["status": "--json", "swiftbar": "--section"][action]!
+        } else if ["status", "swiftbar", "format-logs"].contains(action) {
+            let optional = ["status": "--json", "swiftbar": "--section", "format-logs": "--json"][action]!
             guard args.count == 1 || (args.count == 2 && args[1] == optional) else { throw GuardError("Unexpected options for \(action)") }
         } else if action == "logs" {
             let flags = Array(args.dropFirst())
@@ -133,6 +134,7 @@ enum CLI {
             } else { print("For live PF and private logs: sudo \(Paths.binary) doctor / logs") }
             print("This diagnoses readiness gating; it is not proof of zero leakage or packet-by-packet enforcement.")
         case "swiftbar": print(SwiftBar.render(sectionOnly: args.contains("--section")), terminator: "")
+        case "format-logs": try LogReader.render(.standardInput, json: args.contains("--json"))
         case "edit-config":
             guard geteuid() != 0 else { throw GuardError("Edit the draft as your normal user, then use sudo configure FILE") }
             try FileManager.default.createDirectory(at: userDirectory, withIntermediateDirectories: true,

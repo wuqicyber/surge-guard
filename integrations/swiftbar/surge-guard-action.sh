@@ -1,20 +1,20 @@
-#!/bin/sh
+#!/bin/bash
 # This script runs as the user. Only fixed system/installed commands use sudo.
-set -eu
+set -euo pipefail
 guard_bin=/Library/PrivilegedHelperTools/surge-guard
 label=io.github.surge-guard
 action=${1:---help}
 if [ "$#" -gt 1 ]; then printf '%s\n' 'Expected one action.' >&2; exit 2; fi
 case "$action" in
-    --help) printf '%s\n' 'Actions: restart, start, unlock, backup, rollback, restore-policy, logs, doctor, open-surge'; exit 0 ;;
-    restart|start|unlock|backup|rollback|restore-policy|logs|doctor|open-surge) ;;
+    --help) printf '%s\n' 'Actions: restart, start, unlock, backup, rollback, restore-policy, logs, follow-logs, doctor, open-surge'; exit 0 ;;
+    restart|start|unlock|backup|rollback|restore-policy|logs|follow-logs|doctor|open-surge) ;;
     *) printf '%s\n' 'Unknown recovery action.' >&2; exit 2 ;;
 esac
 if [ "$(id -u)" -eq 0 ]; then printf '%s\n' 'Run this menu action as your normal user.' >&2; exit 1; fi
 if [ "$action" = open-surge ]; then exec /usr/bin/open -a Surge; fi
 
 service_pid() {
-    /bin/launchctl print "system/$label" 2>/dev/null | /usr/bin/awk '/^[[:space:]]*pid =/ {print $3; exit}'
+    sudo -n /bin/launchctl print "system/$label" 2>/dev/null | /usr/bin/awk '/^[[:space:]]*pid =/ {print $3; exit}' || true
 }
 wait_exit() {
     old_pid=$1
@@ -39,7 +39,7 @@ case "$action" in
             exit 1
         fi ;;
 esac
-printf 'Surge Guard recovery: %s\n' "$action"
+printf 'SurgeGuard · %s\n' "$action"
 case "$action" in
     restart|start) printf '%s\n' 'Connections may briefly reset. Protection remains armed. Waiting for the actual result; do not click repeatedly.' ;;
     unlock) printf '%s\n' 'WARNING: this explicitly removes Surge Guard protection until Start guard or next boot. Other PF anchors remain unchanged.' ;;
@@ -47,6 +47,15 @@ case "$action" in
     restore-policy) printf '%s\n' 'Restores the policy saved before the last change. Its allowed routes may differ.' ;;
 esac
 sudo -v
+if [ "$action" = logs ] || [ "$action" = follow-logs ]; then
+    renderer="$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-ui"
+    if [ ! -x "$renderer" ]; then printf '%s\n' 'Reinstall the user menu renderer to format logs.' >&2; exit 1; fi
+    tail_args=(-n 200)
+    if [ "$action" = follow-logs ]; then tail_args+=(-F); fi
+    # Only the fixed tail command is privileged; the formatter stays unprivileged.
+    sudo /usr/bin/tail "${tail_args[@]}" /private/var/db/surge-guard/events.log | "$renderer" format-logs
+    exit 0
+fi
 if [ "$action" = unlock ]; then
     # Independent of the guard executable, policy, renderer and network.
     old_pid=$(service_pid)
@@ -64,7 +73,6 @@ if [ "$modern" -eq 1 ]; then exec sudo "$guard_bin" "$action"; fi
 
 # Legacy support lets recovery be installed BEFORE upgrading the root daemon.
 case "$action" in
-    logs) exec sudo /usr/bin/tail -n 200 /private/var/db/surge-guard/events.log ;;
     doctor) exec sudo "$guard_bin" status ;;
     start) sudo "$guard_bin" start ;;
     restart)

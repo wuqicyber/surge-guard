@@ -14,6 +14,37 @@ func rejects(_ operation: () throws -> Void) throws {
 }
 
 do {
+    let atomicDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("surge-atomic-test-" + UUID().uuidString)
+    do {
+        try UserPaths.prepare(atomicDirectory.path)
+        defer { try? FileManager.default.removeItem(at: atomicDirectory) }
+        let path = atomicDirectory.appendingPathComponent("status.json").path
+        let values = [String(repeating: "A", count: 4096), String(repeating: "B", count: 8192)]
+        let originalMask = umask(0o077)
+        defer { umask(originalMask) }
+        try AtomicFile.write(values[0], to: path, mode: 0o644)
+        final class WriteResult: @unchecked Sendable { var failure: String? }
+        let result = WriteResult(), completed = DispatchGroup()
+        completed.enter()
+        DispatchQueue.global().async {
+            defer { completed.leave() }
+            do { for index in 0..<150 { try AtomicFile.write(values[index % 2], to: path, mode: 0o644) } }
+            catch { result.failure = String(describing: error) }
+        }
+        var unreadable = false, incomplete = false, samples = 0
+        while completed.wait(timeout: .now()) != .success {
+            var info = stat()
+            if lstat(path, &info) != 0 || info.st_mode & 0o777 != 0o644 { unreadable = true }
+            if let value = try? String(contentsOfFile: path), values.contains(value) {} else { incomplete = true }
+            samples += 1
+        }
+        try check(result.failure == nil && samples > 0 && !unreadable && !incomplete,
+                  "Atomic publication exposed wrong permissions or incomplete content: \(result.failure ?? "reader failure")")
+        try AtomicFile.write("private", to: path, mode: 0o600)
+        var info = stat(); lstat(path, &info)
+        try check(info.st_mode & 0o777 == 0o600, "Private state permissions were widened")
+    }
+    print("PASS: atomic state publication keeps final permissions and complete content under restrictive umask")
     let lockURL = FileManager.default.temporaryDirectory.appendingPathComponent("surge-guard-lock-test-" + UUID().uuidString)
     do {
         let first = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
@@ -80,6 +111,9 @@ do {
             if [ ! -f '\(directory)/exited' ]; then touch '\(directory)/exited'; exit 0; fi
             exit 1 ;;
           pfctl) exit 0 ;;
+          tail)
+            if [ -f '\(directory)/tail-failed' ]; then exit 5; fi
+            printf '%s\\n' '{"event":"gate_state","message":"0 application(s) pending"}' ;;
           sleep) exit 0 ;;
         esac
         """
@@ -88,13 +122,17 @@ do {
         let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         var script = try String(contentsOf: project.appendingPathComponent("integrations/swiftbar/surge-guard-action.sh"))
         script = script.replacingOccurrences(of: "guard_bin=/Library/PrivilegedHelperTools/surge-guard", with: "guard_bin='\(directory)/guard'")
-        for tool in ["launchctl", "kill", "sleep", "pfctl"] {
-            let original = tool == "pfctl" ? "/sbin/pfctl" : "/bin/" + tool
+        for tool in ["launchctl", "kill", "sleep", "pfctl", "tail"] {
+            let original = tool == "pfctl" ? "/sbin/pfctl" : tool == "tail" ? "/usr/bin/tail" : "/bin/" + tool
             script = script.replacingOccurrences(of: original, with: "'\(directory)/\(tool)'")
         }
         script = script.replacingOccurrences(of: "sudo ", with: "'\(directory)/sudo' ")
         script = script.replacingOccurrences(of: "$(id -u)", with: "$('\(directory)/id' -u)")
-        for tool in ["guard", "sudo", "launchctl", "kill", "sleep", "pfctl", "id"] {
+        let rendererPath = directory + "/renderer"
+        script = script.replacingOccurrences(of: "renderer=\"$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-ui\"", with: "renderer='\(rendererPath)'")
+        let rendererScript = "#!/bin/sh\nprintf 'renderer %s\\n' \"$*\" >> '\(directory)/calls'\nprintf 'rendered: '\n/bin/cat\n"
+        try rendererScript.write(toFile: rendererPath, atomically: true, encoding: .utf8); chmod(rendererPath, 0o700)
+        for tool in ["guard", "sudo", "launchctl", "kill", "sleep", "pfctl", "tail", "id"] {
             let wrapper = "#!/bin/sh\nexec '\(mock)' \(tool) \"$@\"\n"
             let path = directory + "/" + tool
             try wrapper.write(toFile: path, atomically: true, encoding: .utf8); chmod(path, 0o700)
@@ -114,6 +152,13 @@ do {
         try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
         let refused = try Command.run("/bin/sh", [testScript, "unlock"], timeout: 10)
         try check(refused.status != 0 && !String(contentsOfFile: directory + "/calls").contains("-F rules"), "Recovery cleared rules while old daemon was alive")
+        try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+        let logBridge = try Command.run("/bin/bash", [testScript, "logs"], timeout: 10)
+        let logCalls = try String(contentsOfFile: directory + "/calls")
+        try check(logBridge.status == 0 && logBridge.output.contains("rendered: {") && logCalls.contains("renderer format-logs"), "System log reader bypassed the user formatter")
+        try check(logCalls.contains("sudo \(directory)/tail -n 200 /private/var/db/surge-guard/events.log") && !logCalls.contains("sudo \(rendererPath)"), "User formatter was invoked with sudo")
+        try "".write(toFile: directory + "/tail-failed", atomically: true, encoding: .utf8)
+        try check(try Command.run("/bin/bash", [testScript, "logs"], timeout: 10).status != 0, "Log pipeline concealed a failed privileged reader")
         let plugin = try String(contentsOf: project.appendingPathComponent("integrations/swiftbar/surge-guard.5s.sh"))
         let pluginPath = directory + "/plugin.sh"
         try ("HOME='\(directory)'\n" + plugin).write(toFile: pluginPath, atomically: true, encoding: .utf8)
@@ -121,6 +166,7 @@ do {
         try check(fallback.contains("param1=unlock") && !fallback.contains("---"), "Missing independent fallback when renderer is absent")
     }
     print("PASS: offline legacy recovery waits for exit and refuses to flush while daemon remains alive")
+    print("PASS: SwiftBar log bridge formats without sudo and propagates privileged-reader failure")
 
     for mask in 0..<64 {
         let state = Readiness(trustedProcess: mask & 1 != 0,
@@ -200,7 +246,7 @@ do {
         (false, true, "ready", [], true, false), (true, false, "ready", [], true, false),
         (true, true, "ready", [], false, false), (true, true, "ready", ["com.example.A"], true, false),
         (true, true, "waiting", [], true, false), (true, true, "restoring", [], true, false),
-        (true, true, "error", [], true, false), (true, true, "shutting_down", [], true, false)
+        (true, true, "error", [], true, false), (true, true, "unknown", [], true, false), (true, true, "shutting_down", [], true, false)
     ] {
         let object: [String: Any] = ["running": running, "fresh": fresh, "status": ["state": state, "pending": pending]]
         let report = try JSON.decode(GateStatusReport.self, from: JSONSerialization.data(withJSONObject: object))
@@ -233,6 +279,21 @@ do {
     let machine = try JSONSerialization.jsonObject(with: Data(LogReader.format(logLine, json: true).utf8)) as? [String: Any]
     try check(machine?["event"] as? String == "gate_changed", "Machine log lost event fields")
     try check(LogReader.format("legacy event") == "legacy event", "Legacy logs became unreadable")
+    let legacyPermission: [String: Any] = ["event": "gate_state", "level": "info", "app": "", "pid": 123,
+                                         "message": "unknown: status_unavailable: Error Domain=NSCocoaErrorDomain Code=257 Permission denied UserInfo={raw-details}"]
+    let permissionLine = String(decoding: try JSONSerialization.data(withJSONObject: legacyPermission), as: UTF8.self)
+    let friendlyPermission = LogReader.format(permissionLine)
+    try check(friendlyPermission.contains("WARNING") && friendlyPermission.contains("SurgeGate") && friendlyPermission.contains("EACCES/13") && friendlyPermission.contains("暂停"), "Status failure lacks cause/impact/severity")
+    try check(!friendlyPermission.contains("UserInfo") && !friendlyPermission.contains("event=") && !friendlyPermission.contains("pid="), "Default human log leaked raw diagnostic noise")
+    try check(LogReader.format(permissionLine, json: true).contains("raw-details"), "Raw diagnostics were lost")
+    let terminalInjection = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "\u{1b}[31munknown", "time": "\u{1b}[31mclock", "level": "\u{1b}[31merror"]), as: UTF8.self)
+    try check(!LogReader.format(terminalInjection).contains("\u{1b}"), "Log header preserved terminal control characters")
+    let progress = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "gate_state", "app": "", "message": "1 application(s) pending"]), as: UTF8.self)
+    try check(LogReader.format(progress).contains("剩余 1 个应用"), "Legacy progress was not explained")
+    let recovered = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "gate_status_recovered", "component": "SurgeGate", "details": ["pending_count": 0, "guard_state": "allowed"]]), as: UTF8.self)
+    try check(LogReader.format(recovered).contains("已恢复") && LogReader.format(recovered).contains("剩余 0 个应用"), "Recovery state is not clear")
+    try check(readable.contains("SurgeGuard") && readable.contains("普通联网已阻断") && readable.contains("最终策略"), "System log lacks component/state/route context")
+    print("PASS: both components explain state, cause, impact, progress and recovery; JSON retains raw diagnostics")
     _ = try JSONSerialization.jsonObject(with: Data(LogReader.format("legacy event", json: true).utf8))
     let logURL = FileManager.default.temporaryDirectory.appendingPathComponent("surge-guard-log-test-" + UUID().uuidString)
     do {
@@ -241,6 +302,33 @@ do {
         try LogReader.show(path: logURL.path, follow: false, json: false)
     }
     print("PASS: readable decision logs, machine JSON and legacy records")
+    let eventDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("surge-events-test-" + UUID().uuidString)
+    do {
+        try UserPaths.prepare(eventDirectory.path)
+        defer { try? FileManager.default.removeItem(at: eventDirectory) }
+        let path = eventDirectory.appendingPathComponent("events.jsonl").path
+        let lockPath = path + ".lock"
+        for index in 1...5 {
+            let record = Data(("record-\(index):" + String(repeating: "x", count: EventFile.maximumBytes / 2)).utf8)
+            try EventFile.append(record, to: path, owner: getuid(), lockPath: lockPath)
+        }
+        for (suffix, index) in [("", 5), (".1", 4)] {
+            let value = try Data(contentsOf: URL(fileURLWithPath: path + suffix))
+            var info = stat(); lstat(path + suffix, &info)
+            try check(value.count <= EventFile.maximumBytes && String(decoding: value.prefix(9), as: UTF8.self).hasPrefix("record-\(index):"), "Log rotation lost the newest/previous record or exceeded its bound")
+            try check(info.st_mode & 0o777 == 0o600, "Log permissions were widened")
+        }
+        try check(try FileManager.default.contentsOfDirectory(atPath: eventDirectory.path).count == 3, "Log rotation accumulated extra files")
+        try rejects { try EventFile.append(Data(repeating: 65, count: EventFile.maximumBytes), to: path, owner: getuid(), lockPath: lockPath) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+        try rejects { try EventFile.append(Data("unsafe".utf8), to: path, owner: getuid(), lockPath: lockPath) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        try rejects { try EventFile.append(Data("wrong owner".utf8), to: path, owner: getuid() + 1, lockPath: lockPath) }
+        try FileManager.default.removeItem(atPath: path + ".1")
+        try FileManager.default.createSymbolicLink(atPath: path + ".1", withDestinationPath: path)
+        try rejects { try EventFile.append(Data(repeating: 65, count: EventFile.maximumBytes / 2), to: path, owner: getuid(), lockPath: lockPath) }
+    }
+    print("PASS: bounded private event logs retain only current/previous files and reject oversized or unsafe writes")
 
     let config = """
     # Existing configuration
@@ -319,6 +407,27 @@ do {
     let streams = try Command.run("/bin/sh", ["-c", "printf 'rules'; printf 'ALTQ warning' >&2"])
     try check(streams.output == "rules" && streams.diagnostics == "ALTQ warning", "Diagnostics contaminated structured output")
     print("PASS: command errors and literal arguments")
+    func descriptorCount() -> Int {
+        (0..<4096).filter { fcntl(Int32($0), F_GETFD) != -1 }.count
+    }
+    let descriptorsBefore = descriptorCount()
+    for _ in 0..<40 { _ = try Command.run("/usr/bin/true", []) }
+    try check(descriptorCount() <= descriptorsBefore + 2, "Repeated commands leaked descriptors: before=\(descriptorsBefore), after=\(descriptorCount())")
+    print("PASS: repeated command execution closes pipe descriptors")
+    let failedDescriptors = descriptorCount()
+    for _ in 0..<10 {
+        try rejects { _ = try Command.run("/nonexistent/surge-guard-test", []) }
+        try rejects { _ = try Command.run("/bin/sleep", ["1"], timeout: 0.01) }
+        _ = try Command.run("/bin/cat", [], input: "test")
+    }
+    try check(descriptorCount() <= failedDescriptors + 2, "Command failure/input/timeout leaked pipe descriptors")
+    let mockService = try Command.run("/usr/bin/printf", ["state = running\n pid = 123\n"])
+    try check(try StatusReport.serviceRunning(mockService, pid: 123), "Running daemon rejected")
+    try check(!(try StatusReport.serviceRunning(mockService, pid: 456)), "Mismatched PID accepted")
+    try rejects { _ = try StatusReport.serviceRunning(Command.run("/usr/bin/false", [])) }
+    let absentService = try Command.run("/bin/launchctl", ["print", "system/io.github.surge-guard.nonexistent-test"])
+    try check(!(try StatusReport.serviceRunning(absentService)), "Absent service was treated as running")
+    print("PASS: command failures release descriptors; query errors remain unknown, distinct from absent service")
     // Read-only regression for the group-writable /var/run found on macOS.
     try check(!Paths.runtime.hasPrefix("/var/run/"), "Runtime state must not depend on a non-writable /var/run")
     try RootFiles.verify(URL(fileURLWithPath: Paths.runtime).deletingLastPathComponent().path, directory: true)

@@ -18,6 +18,13 @@ public enum Command {
         guard (input?.utf8.count ?? 0) < 16_384 else { throw GuardError("Command input is too large") }
         let invocation = ([executable] + arguments).joined(separator: " ")
         let task = Process(), outputPipe = Pipe(), errorPipe = Pipe(), inputPipe = Pipe()
+        // Close unused stdin pipes too; long-running callers cannot rely on autorelease.
+        defer {
+            try? inputPipe.fileHandleForReading.close()
+            try? inputPipe.fileHandleForWriting.close()
+            try? outputPipe.fileHandleForWriting.close()
+            try? errorPipe.fileHandleForWriting.close()
+        }
         let finished = DispatchSemaphore(value: 0), drained = DispatchGroup()
         final class Capture: @unchecked Sendable { var bytes = Data(); var overflow = false }
         let capture = Capture(), errors = Capture()
@@ -28,13 +35,18 @@ public enum Command {
         task.standardError = errorPipe
         task.standardInput = input == nil ? FileHandle.nullDevice : inputPipe.fileHandleForReading
         task.terminationHandler = { _ in finished.signal() }
-        try task.run()
+        do { try task.run() }
+        catch {
+            try? outputPipe.fileHandleForReading.close()
+            try? errorPipe.fileHandleForReading.close()
+            throw error
+        }
         outputPipe.fileHandleForWriting.closeFile()
         errorPipe.fileHandleForWriting.closeFile()
         for (pipe, destination) in [(outputPipe, capture), (errorPipe, errors)] {
             drained.enter()
             DispatchQueue.global().async {
-                defer { drained.leave() }
+                defer { try? pipe.fileHandleForReading.close(); drained.leave() }
                 while true {
                     let data = pipe.fileHandleForReading.availableData
                     if data.isEmpty { break }

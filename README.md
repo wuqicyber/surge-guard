@@ -284,6 +284,7 @@ hook for every Apple-menu shutdown, power loss or kernel failure.
 | `surge-guard validate FILE` | Normal user; syntax/semantic validation only |
 | `sudo surge-guard configure FILE` | Validate then atomically install policy; daemon reloads automatically |
 | `sudo surge-guard logs [--follow] [--json]` | Last 200 readable events; optional follow or machine JSON Lines |
+| `surge-guard format-logs [--json]` | Format stdin without privileges; used by the SwiftBar log bridge |
 | `sudo surge-guard restart` | TERM cleanup blocks before launchd restarts the daemon |
 | `sudo surge-guard backup` | Save installed binary, service, anchor file and policy |
 | `sudo surge-guard rollback` | Restore the last update/manual backup, restart and verify |
@@ -302,26 +303,47 @@ seconds without both status and PF audit freshness. Routing results expire after
 three seconds from probe start. These are stale-result cutoffs, not packet-block
 latency guarantees. The daemon polls readiness every 0.5s, routing at roughly 1s,
 and audits PF every 5s. Scheduling and command operations add latency.
+The menu shows the snapshot's local publication time separately from the PF
+audit age. A fresh snapshot can be less than a second old; opening the menu
+does not turn those recorded ages into a live second-by-second clock.
 
-On disk, events are JSON Lines with time, event, level, PID, message and details.
-`logs` renders readable records by default: local time with UTC offset, severity,
-state, explained reason and expected/actual group/final node on separate lines.
+On disk, events are JSON Lines with time, component, event, level, PID, message
+and details. `logs` renders local time, component, severity, state, cause/impact,
+recovery and routing decisions. PID/run/event identifiers and raw OS error
+dictionaries stay in `--json`, keeping the default output readable.
 `--follow` uses the same readable format; `--json` produces machine-readable JSON
 Lines, including a JSON wrapper for old plain-text events. For example:
 
 ```text
-2026-01-01 12:00:00 +00:00  [WARNING] BLOCKED / 已阻断
-  原因 / message: 分流策略与配置不一致 [route_policy_mismatch]: https://example.com
+2026-01-01 12:00:00 +00:00  [WARNING] SurgeGuard · BLOCKED / 已阻断
+  状态：普通联网已阻断，条件通过后自动恢复
+  原因：分流策略与配置不一致 [route_policy_mismatch]: https://example.com
   ✗ https://example.com
-    预期 / expected group: Residential
-    实际 / actual group: Other  最终节点 / final: Node C
-  配置=routes  PF=blocked  pid=123  run=example
-  event=gate_changed
+    预期分流组：Residential
+    实际分流组：Other
+    最终策略：Node C
+  配置=routes  PF=blocked
 ```
 
+SurgeGate distinguishes already-running applications from launch requests,
+reports the remaining count, and records unavailable/recovered status separately.
+A status-file read failure pauses application restoration; it does not by itself
+establish an Internet outage. State files receive their final permissions before
+atomic publication, preventing a transient private-file permission window.
+
+SwiftBar's recent/follow system-log actions use fixed privileged `tail` reads and
+an unprivileged user renderer. This also formats historical logs without running
+user-owned formatting code as root. Root log files stay private; the guard's own
+`logs --json` remains the full source for agent diagnostics.
+
 Use `gate_changed`, `route_decision_changed`, `rule_probe_failed`, `pf_unverified`,
-`configuration_loaded` and `manual_unlock` to follow a decision. Logs rotate at
-1 MiB. App names/URLs/policies are local diagnostic data; do not publish raw logs.
+`configuration_loaded` and `manual_unlock` to follow a decision. Each component
+keeps only its current event file and one `.1` predecessor, each capped at 1 MiB
+(at most 2 MiB per component). Rotation happens before appending; oversized
+records and unsafe files are rejected. Unchanged polls do not produce events.
+The companion's launchd stdout/stderr point to `/dev/null`; logging failures go
+to the macOS-managed system log. Old `service.log` files are retained without
+further writes. App names/URLs/policies are local diagnostic data; do not publish raw logs.
 See [troubleshooting](docs/troubleshooting.md).
 
 ## Managed files and removal

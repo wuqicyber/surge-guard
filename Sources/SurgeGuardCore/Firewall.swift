@@ -42,8 +42,7 @@ public enum RootFiles {
         if lstat(path, &info) == 0 && info.st_mode & S_IFMT == S_IFLNK {
             throw GuardError("Refusing symbolic link: \(path)")
         }
-        try value.write(toFile: path, atomically: true, encoding: .utf8)
-        guard chmod(path, mode) == 0 else { throw GuardError("Cannot set permissions: \(path)") }
+        try AtomicFile.write(value, to: path, mode: mode)
     }
 
     public static func prepareRuntime() throws {

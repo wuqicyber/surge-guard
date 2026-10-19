@@ -13,17 +13,26 @@ sudo /Library/PrivilegedHelperTools/surge-guard logs
 The last command renders retained events as readable records with local time,
 severity, state/reason and expected/actual routing details. `logs --follow` uses
 the same readable format for new events. `logs --json` emits JSON Lines for agents.
+Human output names the component and explains cause, effect, remaining apps and
+recovery. Raw OS errors, event codes and process/run IDs remain in JSON. The
+SwiftBar bridge uses privileged fixed-file reads and unprivileged formatting,
+including for historical events. Its formatter is `surge-guard format-logs`.
 Old plain-text records stay readable and get a JSON wrapper in machine mode.
-Following the log
-need not print anything new while conditions stay unchanged. Events rotate
-at 1 MiB; the previous file is `events.log.1` in the same private state directory.
+Following the log need not print anything new while conditions stay unchanged.
+Each component keeps only its current log and one `.1` predecessor, each at most
+1 MiB. The system predecessor is `events.log.1`; the companion predecessor is
+`gate-events.jsonl.1`. Oversized records are rejected, and no unbounded companion
+stdout/stderr file is configured. Existing `service.log` is retained without
+further writes after the user service is updated.
 Never make the private directory world-readable to simplify menu access.
 
 | Symptom/reason | Check | Action |
 | --- | --- | --- |
 | `unknown`, `status_unavailable` | Is the new binary installed? Is the system job running? | An old daemon does not publish the new status schema. Install the independent recovery menu first, then update system and companion. Do not label PID-only detection as protected. |
+| Permission denied reading status, followed shortly by recovery | Actual snapshot modes and `gate_status_unavailable` / `gate_status_recovered` | A verified writer bug briefly exposed 0600 during Foundation atomic rewrite. Update to the pre-permissioned POSIX publication fix. Do not make the entire private state directory readable or infer a network outage from a reader error. See the permission-window incident. |
 | `status_or_pf_audit_expired` | Current PID, boot and recent `pf_unverified`/restart events | Run root doctor. A stale snapshot cannot prove either allowed or blocked PF; do not assume the menu color alone proves protection. |
 | `stopped` | `launchctl print system/io.github.surge-guard` | Start the installed service; inspect startup errors if it exits. |
+| `service_query_failed`, or old SurgeGate says `stopped` while the guard is verified allowed | Compare both CLI reports and inspect the companion's open descriptors | An unused-stdin pipe leak in the shared command runner caused persistent query failures. Update both binaries; query failures now stay unknown. See [the command-pipe incident](incidents/command-pipe-leak.md). |
 | `unlocked` | `manual_unlock` event from this boot | This is intentional temporary removal. `start` or reboot re-arms; `uninstall` is permanent removal. |
 | `configuration_invalid` | Validate the intended local policy | Correct the local draft and use `sudo ... configure FILE`. No enhanced-only fallback occurs on damaged installed settings. |
 | `rule_probe_pending` | Is a console user logged in? | Wait for the user session and first bounded query. No external HTTP health request is required. |
@@ -45,6 +54,8 @@ Never make the private directory world-readable to simplify menu access.
 
 - `waiting`: the system guard has not recently verified `allowed`. Inspect its
   reasons first. A local proxy port being open is not a substitute.
+- `unknown`: the guard report cannot be verified/read. Restoration pauses;
+  this does not establish that the guard process or networking has stopped.
 - `restoring`: some app launches remain pending. `application_restore_failed`
   identifies the bundle ID; absent apps remain pending rather than being lost.
 - `ready`: initial restoration is complete. This is not a separate PF claim.

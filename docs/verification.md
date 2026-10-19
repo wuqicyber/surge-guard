@@ -171,3 +171,51 @@ issued by the agent during the user-companion migration.
 - Read both installed property lists and verified RunAtLoad/KeepAlive. This
   establishes automatic boot/login configuration, not actual reboot acceptance.
   No power command, system service restart or firewall mutation was executed.
+
+## Readable bounded logs and persistent companion queries — 2026-10-19
+
+- Observed an actual status publication race: a four-second read-only sample
+  caught one 0600 snapshot and one EACCES failure. A separate temporary-file
+  reproduction confirmed Foundation atomic publication under umask 077 could
+  expose private permissions before its final permission restoration. The new
+  shared writer applies mode/fsync before POSIX rename. A concurrent regression
+  reads complete old/new contents and final modes through 150 rewrites.
+- Diagnosed a second issue independently: the companion held 2,559 numeric
+  descriptors and persistently reported stopped while the actual system guard
+  remained fresh/allowed. Forty local command calls reproduced descriptor growth
+  from 25 to 105. The shared command runner now explicitly closes unused stdin
+  pipes and drained output readers, including failed launches. Query failures
+  remain unknown and have a separate companion menu state.
+- Backed up the user binary, plist and local session before deployment. Updated
+  the user companion and combined-menu renderer; the existing system daemon
+  remained running/allowed. The companion recognized already-running apps,
+  returned to fresh ready with zero pending, and held four numeric descriptors
+  over multiple observations through more than four minutes of polling.
+- Both components use one bounded event-file writer: current and one previous
+  file, each at most 1 MiB, with a private writer lock and ownership checks.
+  Tests exercise repeated rotation, newest/previous retention, bounded size,
+  private permissions, oversized records, wrong ownership and unsafe backup
+  symlinks. The companion launchd stdout/stderr now point to `/dev/null`;
+  logging failures use the macOS system log. Existing service.log is retained.
+- Human logs now identify component/severity and explain state, cause, impact,
+  remaining applications and recovery. JSON retains original errors and fields.
+  Confirmed the installed companion prints the readable format. The real
+  SwiftBar action script is tested with fake tools: only fixed tail reads get
+  sudo, formatting stays unprivileged and reader failures propagate.
+- The menu displays actual local snapshot publication time separately from PF
+  audit age and notes these are menu-generation values. It explicitly states
+  rule inspection sends no request to the target. All companion action icons
+  use SwiftBar's native SF Symbol column with common 16×16 sizing; power controls
+  remain in the SurgeGate submenu. The isolated installed menu renders both
+  components green. The combined plugin was refreshed through SwiftBar's URL API.
+- `scripts/check.sh` passes all 28 standalone groups, both release builds with
+  warnings as errors, the stdin log-formatting smoke test and shell checks.
+
+The updated system binary has **not** been installed in this phase: sudo still
+requires an interactive password, and the installed executable differs from
+the new build. The observed permission race therefore remains possible in the
+running root writer until the operator installs the new system build. Native
+and UI deployment alone cannot establish that the root writer was replaced.
+No external target request, Surge toggle, PF change, app quit or OS power action
+was performed during these checks. Long-duration, power-loss and disruptive
+acceptance items above remain unperformed.

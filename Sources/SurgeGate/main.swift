@@ -3,30 +3,15 @@ import AppKit
 import Darwin
 import SurgeGuardCore
 
-func event(_ code: String, _ message: String, app: String? = nil) {
+func event(_ code: String, _ message: String, app: String? = nil, level: String? = nil, details: [String: Any] = [:]) {
     do {
         try UserPaths.prepare()
-        if FileManager.default.fileExists(atPath: UserPaths.log),
-           (try FileManager.default.attributesOfItem(atPath: UserPaths.log)[.size] as? NSNumber)?.intValue ?? 0 >= 1_048_576 {
-            let backup = UserPaths.log + ".1"
-            if FileManager.default.fileExists(atPath: backup) { try FileManager.default.removeItem(atPath: backup) }
-            try FileManager.default.moveItem(atPath: UserPaths.log, toPath: backup)
-        }
-        let record: [String: Any] = ["time": ISO8601DateFormatter().string(from: Date()), "event": code,
-                                    "level": code.contains("failed") || code.contains("error") || code.contains("aborted") ? "error" : "info",
-                                    "message": message, "app": app ?? "", "pid": getpid(), "boot_id": SystemClock.bootID]
+        let record: [String: Any] = ["time": ISO8601DateFormatter().string(from: Date()), "component": "SurgeGate", "event": code,
+                                    "level": level ?? (code.contains("failed") || code.contains("error") || code.contains("aborted") ? "error" : "info"),
+                                    "message": message, "app": app ?? "", "pid": getpid(), "boot_id": SystemClock.bootID, "details": details]
         let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .withoutEscapingSlashes])
-        let fd = open(UserPaths.log, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw GuardError("Cannot open gate log") }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        var info = stat()
-        guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o077 == 0 else {
-            try handle.close()
-            throw GuardError("Unsafe gate log permissions")
-        }
-        try handle.write(contentsOf: data + Data([10]))
-        try handle.close()
-    } catch { fputs("SurgeGate logging failed: \(error)\n", stderr) }
+        try EventFile.append(data, to: UserPaths.log, owner: getuid(), lockPath: UserPaths.log + ".lock")
+    } catch { NSLog("SurgeGate event %@: %@; logging failed: %@", code, message, String(describing: error)) }
 }
 
 func applications() throws -> [NSRunningApplication] {
@@ -40,8 +25,8 @@ func appIDs(_ config: GateConfiguration) throws -> [String] {
     return Array(Set(try applications().compactMap(\.bundleIdentifier))).filter { !excluded.contains($0) }.sorted()
 }
 
-func launch(_ id: String) throws {
-    if NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { !$0.isTerminated }) { return }
+@discardableResult func launch(_ id: String) throws -> Bool {
+    if NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { !$0.isTerminated }) { return false }
     guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { throw GuardError("Application is not installed") }
     let config = NSWorkspace.OpenConfiguration()
     config.activates = false
@@ -53,6 +38,7 @@ func launch(_ id: String) throws {
     while result == nil && SystemClock.seconds < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
     guard let result else { throw GuardError("Application launch timed out") }
     try result.get()
+    return true
 }
 
 struct GateStatus: Codable {
@@ -128,6 +114,7 @@ func run() throws {
     var pending = initial.targets(saved: saved.pending + saved.apps)
     try UserPaths.write(try JSON.encode(GateSession(apps: saved.apps, pending: pending)), to: UserPaths.session)
     var lastMessage = ""
+    var lastGuardState: String?
     var lastSnapshot: Double = 0
     var nextLaunch: Double = 0
     var nextSurgeLaunch: Double = 0
@@ -165,9 +152,11 @@ func run() throws {
                 let status = StatusReport.read()
                 if status.state == "allowed", let target = pending.first, SystemClock.seconds >= nextLaunch {
                     switch Result(catching: { try launch(target) }) {
-                    case .success:
+                    case .success(let requestedLaunch):
                         pending.removeFirst()
-                        event("application_restored", "Application launch succeeded", app: target)
+                        event(requestedLaunch ? "application_restored" : "application_already_running",
+                              requestedLaunch ? "Application launch request completed" : "Application was already running; no launch requested",
+                              app: target, details: ["pending_count": pending.count])
                         nextLaunch = SystemClock.seconds + config.delayBetweenAppsSeconds
                         try saveSession(config, pending: pending)
                     case .failure(let error):
@@ -177,10 +166,21 @@ func run() throws {
                         nextLaunch = SystemClock.seconds + 30
                     }
                 }
-                let state = status.state == "allowed" ? (pending.isEmpty ? "ready" : "restoring") : "waiting"
+                let state = status.state == "unknown" ? "unknown" : status.state == "allowed" ? (pending.isEmpty ? "ready" : "restoring") : "waiting"
                 let message = status.state == "allowed" ? "\(pending.count) application(s) pending" : "\(status.state): \(status.reason)"
                 try publish(state, message, pending: pending)
-                if message != lastMessage { event("gate_state", message); lastMessage = message }
+                if message != lastMessage {
+                    let code: String
+                    if status.state == "unknown" { code = "gate_status_unavailable" }
+                    else if lastGuardState == "unknown" { code = "gate_status_recovered" }
+                    else if status.state != "allowed" { code = "gate_waiting" }
+                    else { code = pending.isEmpty ? "gate_ready" : "gate_restore_progress" }
+                    event(code, message, level: status.state == "unknown" ? "warning" : "info",
+                          details: ["pending_count": pending.count, "guard_state": status.state,
+                                    "reason": status.reason, "previous_guard_state": lastGuardState ?? "initial"])
+                    lastMessage = message
+                    lastGuardState = status.state
+                }
                 if SystemClock.seconds - lastSnapshot >= 30 {
                     try saveSession(config, pending: pending)
                     lastSnapshot = SystemClock.seconds
@@ -280,7 +280,7 @@ func install() throws {
     try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
     let plist: [String: Any] = ["Label": UserPaths.label, "ProgramArguments": [UserPaths.binary, "run"],
                                "RunAtLoad": true, "KeepAlive": true, "ThrottleInterval": 10,
-                               "StandardOutPath": UserPaths.directory + "/service.log", "StandardErrorPath": UserPaths.directory + "/service.log"]
+                               "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"]
     try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: URL(fileURLWithPath: UserPaths.plist), options: .atomic)
     try Command.checked("/bin/launchctl", ["enable", domain + "/" + UserPaths.label])
     try Command.checked("/bin/launchctl", ["bootstrap", domain, UserPaths.plist], timeout: 10)
