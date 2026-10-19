@@ -395,6 +395,26 @@ verification**, not actual process exit to the last escaping packet. The guard
 remains resident; event handling, a 0.5-second fallback and bounded system commands
 do not promise a fixed tens-of-milliseconds block deadline.
 
+The guard also subscribes directly to the verified Surge service's native tunnel
+status. Disconnecting, disconnected, connecting and unknown states cannot open
+the gate. When an allowed gate receives a loss/exit event, or observes the
+primary service/tunnel is no longer ready, it loads blocking rules and clears old
+connection states **before** the remaining readiness/configuration probes and PF
+integrity queries. Stale callbacks from a replaced subscription are ignored;
+subscription failure fails closed. Reopening still requires all six checks and
+fresh configured routing results.
+
+`readiness_loss_blocked` records separate monotonic times for event receipt/loss
+observation, rule-load completion and verified block/state-cleanup completion.
+Rules alone do not terminate existing PF states, so the final completion matters.
+These intervals do not measure actual tunnel failure to event delivery, or prove
+zero escaped packets. Allowed mode still clears this guard's anchor: **faster
+notification handling is not a permanent packet-level kill switch**. Strict
+no-fallback enforcement requires verified tunnel/system filtering support;
+the documented Surge `include-all-networks` profile option is under
+[iOS-only parameters](https://manual.nssurge.com/profile/general.html), not a
+validated macOS solution. Do not set it on a Mac and claim this requirement passed.
+
 ## Managed files and removal
 
 | Path | Owner / purpose |

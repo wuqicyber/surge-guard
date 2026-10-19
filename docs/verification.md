@@ -364,3 +364,37 @@ unperformed. Installing only the user renderer does not enable background logs.
 No service restart, PF mutation, external target request or intentional bypass
 was performed. Packet capture/path verification, exit-to-block latency and the
 previously listed disruptive/power acceptance scenarios remain unperformed.
+
+## Native tunnel-loss subscription and priority blocking — 2026-10-19
+
+- Read-only correlation of Surge's own disconnect/core-stop records with guard
+  system-log mirrors showed the tunnel disconnected before the UI process exited.
+  Watching UI exit alone therefore cannot cover the start of graceful teardown.
+  Log timestamp differences are not measurements of escaped packets.
+- Added native status subscription to the verified primary Surge service. Any
+  non-connected/unknown status is a loss; callbacks from an obsolete subscription
+  are ignored. Subscription/replacement errors use the existing fail-closed path.
+  A known loss while allowed now blocks before remaining readiness/configuration
+  probes and PF integrity queries, invalidates old routing results and publishes
+  blocked status after verification. All existing reopening conditions remain.
+- Added separate monotonic timing for loss receipt/observation, rule loading and
+  final block/state cleanup. Existing states are still cleared using only the
+  Mac's remembered addresses; no global PF state flush or unrelated rule changes
+  were introduced. Human logs explicitly state the unmeasured event-delivery gap.
+- All 32 standalone groups, both warnings-as-errors release builds and shell
+  checks pass. Added connected versus disconnecting/disconnected/connecting/
+  invalid-state cases and human/JSON stage-timing regressions. A standalone native
+  read-only probe successfully subscribed to the current Surge service and
+  received its connected status. Initial subscription state was asynchronous,
+  so the guard retains blocking until a connected observation and full checks.
+- Updated the user-side log renderer/recovery files with a backup and confirmed
+  the isolated SwiftBar section retains both recovery and emergency entries.
+  Fresh read-only readiness/rule and installed-daemon status checks still pass.
+  This display update does not activate the new daemon callback path.
+
+The new system binary has not been installed in this phase. No Surge disconnect,
+guard restart, PF mutation, intentional bypass or packet-capture acceptance was
+performed. Live reaction latency and old-state termination remain unverified.
+Allowed mode still clears this guard's anchor; this change improves reactive
+blocking and does not implement permanent packet-level no-bypass enforcement.
+The strict zero-window requirement is not established by these checks.

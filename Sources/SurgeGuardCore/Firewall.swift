@@ -158,12 +158,14 @@ public final class Firewall {
         return try readRules() == expectedRules
     }
 
-    public func block() throws {
+    @discardableResult
+    public func block() throws -> (rulesLoadedUptime: Double, statesClearedUptime: Double) {
         rememberAddresses()
         // Load fail-closed rules before slower integrity checks. If the anchor
         // was detached, ensureEnabled still rejects the transition.
         try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"],
                             input: Policy.blocked, timeout: 5)
+        let rulesLoaded = SystemClock.seconds
         try ensureEnabled()
         let actual = try readRules()
         guard actual.contains("surge-guard-block") else { throw GuardError("Block rule did not load") }
@@ -175,6 +177,7 @@ public final class Firewall {
         }
         knownAddresses = Set(Probe.addresses().filter { !$0.loopback }.map(\.address))
         expectedRules = actual
+        return (rulesLoaded, SystemClock.seconds)
     }
 
     public func allow() throws {

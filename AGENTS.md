@@ -56,6 +56,10 @@ Read README.md first. It is the operational contract for all three components.
   anchor clearing on unexpected errors or a running job without a valid PID.
 - Document the reactive/early-boot limitations accurately. Do not market this
   external gate as guaranteed packet-by-packet enforcement.
+- A known tunnel/process loss while allowed must block before remaining probes
+  and integrity queries. Watch the verified native service, reject obsolete
+  callbacks and distinguish rule loading from old-state cleanup in timing logs.
+  Never treat callback latency as actual failure-to-packet-block latency.
 - Egress observations are passive evidence, never inputs to PF permission.
   Use the second nettop delta frame, expose missing counters/interfaces/UDP peers,
   and separate system-extension/local activity from public application warnings.

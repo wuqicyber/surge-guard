@@ -35,6 +35,7 @@ For each transition, record the time, `surge-guard check`, root `status`, logs, 
 | Invalid/missing installed policy | Blocked; no readiness-only fallback | Configuration failure |
 | Old boot/PID or stale status/PF audit | Menu reports unknown/stopped; Gate does not restore apps | No cached green status |
 | Turn Enhanced Mode off | Blocked; measure actual latency | Toggle path |
+| Graceful Surge update begins disconnecting | Native tunnel event triggers blocking before remaining probes | Early-disconnect subscription; record rule-load and old-state-cleanup times separately |
 | Quit or force-quit Surge | Blocked; measure actual latency | Process/extension exit |
 | Another VPN active, Surge off | Blocked | Wrong-tunnel rejection |
 | Turn Surge Enhanced Mode back on | Fresh networking recovers | Recovery without DNS deadlock |
@@ -79,6 +80,13 @@ Test the legacy migration using copied local data, confirm original files remain
 and confirm only one companion LaunchAgent runs. Do not publish the legacy data.
 
 Do not claim that `SIGKILL` of the guard while allowed remains closed: this is a documented limitation. If intentionally testing it, record the open interval and verify launchd recovery. Likewise, boot-time traffic before PF/service activation is not covered by the guarantee.
+
+For early-disconnect acceptance, correlate the native tunnel status with the
+`readiness_loss_blocked` event and a physical-interface capture. Test graceful
+disconnect and abrupt loss separately; an early graceful callback does not prove
+the crash path has no gap. Record actual packet behavior through rule loading
+and state cleanup. A successful notification subscription, parser test or new
+binary installation is not live no-bypass acceptance.
 
 ## Egress observation
 
