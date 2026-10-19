@@ -1,0 +1,29 @@
+README.md
+  s_feb680f5d77ef5::t_c90c3f7a0d6f90 227,261
+README.zh-CN.md
+  s_feb680f5d77ef5::t_abc2493a7971a9 157
+Sources/SurgeGuard/SwiftBar.swift
+  s_feb680f5d77ef5::t_768dadb2e9f3ed 20,82,91,97-98
+integrations/swiftbar/surge-guard-action.sh
+  s_feb680f5d77ef5::t_0a284b3700e3ff 42,45
+integrations/swiftbar/surge-guard.5s.sh
+  s_feb680f5d77ef5::t_f3b27f464a2df8 2,11
+docs/verification.md
+  s_feb680f5d77ef5::t_6f061c62450c86 222-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "dca88dcd1caa3ff430ac6f942a791fbe0912bb45",
+  "prompts": {},
+  "sessions": {
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
