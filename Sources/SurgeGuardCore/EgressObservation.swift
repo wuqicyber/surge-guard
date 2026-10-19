@@ -64,7 +64,7 @@ public struct EgressObservation: Codable {
             guard frame > 0, fields.count == 6, fields.last == "" else { throw GuardError("Unrecognized nettop CSV row") }
             guard frame == 2 else { continue }
             deltaRows += 1
-            if !["tcp4 ", "tcp6 ", "udp4 ", "udp6 "].contains(where: { fields[0].hasPrefix($0) }) {
+            if !fields[0].contains("<->") {
                 guard fields[1].isEmpty, let dot = fields[0].lastIndex(of: "."),
                       let parsed = Int32(fields[0][fields[0].index(after: dot)...]), parsed > 0 else {
                     throw GuardError("Unrecognized nettop process row")

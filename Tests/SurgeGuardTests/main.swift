@@ -36,6 +36,9 @@ do {
               "Egress sample lost IPv4/IPv6/local/unknown activity or included Surge/idle sockets")
     try check(observed.flows[0].process == "Example, Browser" && observed.flows[0].sentBytes == 200,
               "Egress sample used lifetime totals or broke quoted process names")
+    let transportNamedProcess = try EgressObservation.parse(egressFirst + egressDelta.replacingOccurrences(of: "Example, Browser.400", with: "tcp4 Client.400"),
+                                                           surgeInterface: "utun108", surgePID: 401)
+    try check(transportNamedProcess.flows.first?.process == "tcp4 Client", "Process name was mistaken for a socket row")
     let duplicateUDP = "udp4 *:5004<->*:*,en0,,50,20,\n"
     let reused = try EgressObservation.parse(egressFirst + egressDelta.replacingOccurrences(of: duplicateUDP, with: duplicateUDP + duplicateUDP),
                                             surgeInterface: "utun108", surgePID: 401)
