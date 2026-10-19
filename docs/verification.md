@@ -294,3 +294,73 @@ Private root PF/log inspection was unavailable without an interactive sudo
 credential. The read-only daemon report supplies recent root-owned PF audit
 results. Deliberate failure/traffic blocking, real emergency unlock, automatic
 rollback, sleep, power loss and OS shutdown acceptance remain unperformed.
+
+## Passive egress evidence and exit-event timing — 2026-10-19
+
+- Inspected the guard's own events mirrored to the macOS unified log. A Surge
+  update recorded unavailable extension/service readiness as blocked, followed by
+  allowed only after the configured routing check passed. The inspected window
+  contains no PF-unverified, reconciliation-failed or manual-unlock event. These
+  state events cannot reconstruct individual historical flows or actual exit-to-
+  packet-block latency. Repeated pending/blocked/allowed cycles were also seen;
+  their underlying notification behavior is unchanged by this logging update.
+- Added asynchronous fixed-system-command socket sampling, new-byte evidence,
+  public/local/unknown destination classification, root-owned system-extension
+  classification, bounded per-flow dedup and sample summaries. Neither evidence
+  nor observation failure participates in the PF readiness decision. Millisecond
+  event time, monotonic uptime and callback-to-verified-block timing preserve
+  future diagnostic evidence without promising a fixed blocking deadline.
+- All 31 standalone groups, both warnings-as-errors release builds and shell
+  checks pass. Focused fixtures cover lifetime versus delta frames, quoted process
+  names, IPv4 and both IPv6 endpoint formats, local/unknown/idle sockets, absent
+  counters/interfaces, reused UDP tuples, malformed output, dedup/batch limits,
+  machine JSON and human evidence/timing formatting. A real read-only sample
+  exposed normal empty nettop counters; the fixture and parser now cover them.
+- Ran the new release and installed user-renderer samples without external test
+  requests. Both parse the real output, expose visibility gaps and distinguish
+  independently running system-extension traffic from application candidates.
+  Samples contained no records combining a public peer with a non-extension
+  application during those intervals. Socket interface labels do not establish
+  packet paths; this was not a historical or packet-level bypass audit.
+- Updated the user renderer/recovery components using recovery-only installation,
+  retaining its backup. The isolated combined-section output has the new manual
+  egress action and both recovery entries. Refreshed SwiftBar without restarting
+  either service. Existing private plugin content was not executed or published.
+- Hosted checks using macos-14 remained queued during its announced October 19
+  retirement brownout. Moved the existing job to macos-15 without changing its
+  test/build steps; see the [runner retirement announcement](https://github.com/actions/runner-images/issues/13518).
+
+The system daemon has not been replaced during this phase: non-interactive sudo
+is unavailable and interactive administrator verification was not completed.
+Background observer persistence, root process visibility, exit-event timing,
+controlled bypass/traffic blocking and restart/rollback/power scenarios remain
+unperformed. Installing only the user renderer does not enable background logs.
+
+## Correct socket evidence wording — 2026-10-19
+
+- The operator has since installed the preceding observer build. Before this
+  correction its installed and local release hashes matched; fresh read-only
+  status reported allowed with the configured routing check passing. Unified-log
+  mirrors from the running daemon include observer summaries and activity events.
+  This confirms the observer is running, not that packet paths were audited;
+  complete private root event files were not read in this phase.
+- Corrected misleading human wording shared by historical log rendering and the
+  manual sample. The renderer identifies reported socket interfaces, shows both
+  endpoints and distinguishes receive-only activity from sent-byte counters.
+  Wildcard UDP peers stay unknown. Local UDP port 5353 is only an mDNS hint;
+  neither the port nor the interface label proves a destination or packet path.
+  Original machine JSON, counters, sampling and firewall decisions are unchanged.
+- All 31 standalone groups, warnings-as-errors release builds and shell checks
+  pass. A focused six-record generic fixture covers wildcard IPv4/IPv6 UDP,
+  receive-only records, a high local port and qualified service-port hints. It
+  rejects confirmed-bypass/public-direct wording and verifies JSON preservation.
+- Updated only the user renderer/recovery components after backing them up and
+  refreshed SwiftBar. Its isolated menu offers the renamed read-only connection
+  sample; the installed UI hash matches the new release. A real installed-renderer
+  sample shows unknown-peer receive-only records with local UDP port 5353, and
+  the JSON command remains parseable. The new wording also renders old records
+  without rewriting logs or replacing the running system daemon.
+
+No service restart, PF mutation, external target request or intentional bypass
+was performed. Packet capture/path verification, exit-to-block latency and the
+previously listed disruptive/power acceptance scenarios remain unperformed.

@@ -296,6 +296,7 @@ hook for every Apple-menu shutdown, power loss or kernel failure.
 | `surge-guard check --json` | Normal user; fresh conditions; exit 0 ready, 1 not ready/error |
 | `surge-guard status --json` | Normal user; recent daemon/PF snapshot; exit 0 if report produced |
 | `surge-guard doctor` | Normal user summary; sudo adds live PF inspection |
+| `surge-guard observe-egress [--json]` | Read-only socket/interface activity sample; sudo can improve process visibility |
 | `surge-guard validate FILE` | Normal user; syntax/semantic validation only |
 | `sudo surge-guard configure FILE` | Validate then atomically install policy; daemon reloads automatically |
 | `sudo surge-guard logs [--follow] [--json]` | Last 200 readable events; optional follow or machine JSON Lines |
@@ -360,6 +361,39 @@ The companion's launchd stdout/stderr point to `/dev/null`; logging failures go
 to the macOS-managed system log. Old `service.log` files are retained without
 further writes. App names/URLs/policies are local diagnostic data; do not publish raw logs.
 See [troubleshooting](docs/troubleshooting.md).
+
+The updated daemon also samples socket activity for about one second every
+30 seconds using the fixed system `nettop` command in a background task. It logs
+`egress_path_observed` when socket counters change and the **reported interface**
+differs from Surge VIF, excluding the verified Surge process and loopback.
+Evidence includes PID/process, reported interface, local/remote endpoints and
+**new bytes in the sample**, not lifetime counters. These are socket observations,
+not captured packets: the interface field does not establish the actual packet
+path or prove bypass. A public application record is flagged for review, not a
+confirmed direct connection. Receive-only records are labeled separately from
+records with sent bytes. A wildcard UDP peer is unknown, not a public destination.
+Local UDP port 5353 suggests mDNS but cannot establish that record's destination
+or path. System-extension identity does not approve an independent network.
+Classification never changes PF; no product, interface number or user-specific
+exception is hardcoded.
+
+The same connection is deduplicated for five minutes, with at most 20 new evidence
+records per sample and a five-minute summary. Existing private 1 MiB rotation
+still applies. Missing counters/interfaces and unresolved UDP targets are exposed
+as coverage gaps. Command/parsing failures generate an observation-unavailable
+event and recovery is recorded; observation failure never changes network policy.
+Short-lived connections between samples, packet-level enforcement and complete
+historical reconstruction are **not covered**. No events is not proof of no bypass.
+SwiftBar provides **查看连接采样（只读）** and the existing log actions show this
+evidence. Background logging starts only after the updated system guard is installed;
+updating the user renderer alone adds the manual check, not background observation.
+
+System events now retain millisecond wall time and monotonic uptime. A received
+Surge process-exit callback adds its time and the subsequent verified-block time
+to the blocking event. The elapsed time measures **callback receipt to PF
+verification**, not actual process exit to the last escaping packet. The guard
+remains resident; event handling, a 0.5-second fallback and bounded system commands
+do not promise a fixed tens-of-milliseconds block deadline.
 
 ## Managed files and removal
 

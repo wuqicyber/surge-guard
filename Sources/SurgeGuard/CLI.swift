@@ -9,6 +9,7 @@ enum CLI {
       check [--json] [--config FILE]   Probe conditions; does not prove PF is active
       status [--json]                  Read the daemon's recent verified status
       doctor                          Explain conditions, configuration and service status
+      observe-egress [--json]          Read-only socket/interface sample; not a no-bypass certificate
       validate FILE                   Validate a policy without network changes
       rules                           Preview blocked PF rules
       swiftbar [--section]             Render the portable SwiftBar menu
@@ -98,8 +99,8 @@ enum CLI {
                 else if option == "--json", action == "check" { index += 1 }
                 else { throw GuardError("Unknown or incomplete option: \(option)") }
             }
-        } else if ["status", "swiftbar", "format-logs"].contains(action) {
-            let optional = ["status": "--json", "swiftbar": "--section", "format-logs": "--json"][action]!
+        } else if ["status", "swiftbar", "format-logs", "observe-egress"].contains(action) {
+            let optional = ["status": "--json", "swiftbar": "--section", "format-logs": "--json", "observe-egress": "--json"][action]!
             guard args.count == 1 || (args.count == 2 && args[1] == optional) else { throw GuardError("Unexpected options for \(action)") }
         } else if action == "logs" {
             let flags = Array(args.dropFirst())
@@ -117,6 +118,21 @@ enum CLI {
         case "status":
             let report = StatusReport.read()
             print(try JSON.encode(report, pretty: !args.contains("--json")))
+        case "observe-egress":
+            let report = try EgressObservation.collect()
+            if args.contains("--json") { print(try JSON.encode(report)) }
+            else {
+                if report.flows.isEmpty { print("本次采样没有可展示的其他接口 socket 记录；覆盖缺口见下方。这不能确认历史或采样间隔内是否绕过。") }
+                else {
+                    let details = try JSONSerialization.jsonObject(with: Data(JSON.encode(report).utf8))
+                    let timestamp = ISO8601DateFormatter()
+                    timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    let event: [String: Any] = ["event": "egress_path_observed", "component": "SurgeGuard", "details": details,
+                                              "time": timestamp.string(from: report.sampledAt)]
+                    print(LogReader.format(String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self)))
+                }
+                print("采样缺口：目标未知 \(report.unresolvedActiveSockets)，接口未知 \(report.unattributedActiveSockets)，无计数 \(report.unmeasuredSockets)。只读，不修改防火墙。")
+            }
         case "validate":
             guard args.count == 2 else { throw GuardError("Usage: validate FILE") }
             let config = try Configuration.decode(Data(contentsOf: URL(fileURLWithPath: args[1])))

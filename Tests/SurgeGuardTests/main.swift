@@ -14,6 +14,97 @@ func rejects(_ operation: () throws -> Void) throws {
 }
 
 do {
+    let egressHeader = ",interface,state,bytes_in,bytes_out,\n"
+    let egressFirst = egressHeader + "Example.400,,,999,999,\ntcp4 192.168.1.2:5000<->1.1.1.1:443,en0,Established,999,999,\n"
+    let egressDelta = egressHeader + "\"Example, Browser.400\",,,100,200,\n" +
+        "tcp4 192.168.1.2:5000<->1.1.1.1:443,en0,Established,100,200,\n" +
+        "tcp4 192.168.1.2:5001<->8.8.8.8:443,en0,Established,0,0,\n" +
+        "tcp4 192.168.1.2:5002<->10.0.0.1:443,en0,Established,100,200,\n" +
+        "tcp4 198.18.0.1:5003<->1.1.1.1:443,utun108,Established,100,200,\n" +
+        "udp4 *:5004<->*:*,en0,,50,20,\n" +
+        "tcp6 [2001:4860::1]:5005<->[2001:4860::8888]:443,en0,Established,30,40,\n" +
+        "tcp6 2001:4860::1.5007<->2001:4860::8888.443,en0,Established,30,40,\n" +
+        "udp4 *:*<->*:*,,,,,\n" +
+        "tcp4 *:5008<->*:*,,Listen,,,\n" +
+        "udp4 *:5009<->*:*,en0,,0,0,\n" +
+        "udp4 *:5010<->*:*,en0,,1,0,\n" +
+        "tcp4 192.168.1.2:5011<->1.1.1.1:443,,Established,1,2,\n" +
+        "Surge.401,,,100,200,\ntcp4 192.168.1.2:5006<->1.0.0.1:443,en0,Established,100,200,\n"
+    let observed = try EgressObservation.parse(egressFirst + egressDelta, surgeInterface: "utun108", surgePID: 401)
+    try check(observed.flows.count == 6 && observed.flows.filter({ $0.destinationScope == "public" }).count == 3 &&
+              observed.unresolvedActiveSockets == 2 && observed.unmeasuredSockets == 1 && observed.unattributedActiveSockets == 1,
+              "Egress sample lost IPv4/IPv6/local/unknown activity or included Surge/idle sockets")
+    try check(observed.flows[0].process == "Example, Browser" && observed.flows[0].sentBytes == 200,
+              "Egress sample used lifetime totals or broke quoted process names")
+    let transportNamedProcess = try EgressObservation.parse(egressFirst + egressDelta.replacingOccurrences(of: "Example, Browser.400", with: "tcp4 Client.400"),
+                                                           surgeInterface: "utun108", surgePID: 401)
+    try check(transportNamedProcess.flows.first?.process == "tcp4 Client", "Process name was mistaken for a socket row")
+    let duplicateUDP = "udp4 *:5004<->*:*,en0,,50,20,\n"
+    let reused = try EgressObservation.parse(egressFirst + egressDelta.replacingOccurrences(of: duplicateUDP, with: duplicateUDP + duplicateUDP),
+                                            surgeInterface: "utun108", surgePID: 401)
+    try check(reused.flows.first(where: { $0.localEndpoint == "*:5004" })?.sentBytes == 40,
+              "Reused UDP tuple discarded activity or disabled the observer")
+    let encodedEgress = try JSON.encode(observed)
+    try check(try JSON.decode(EgressObservation.self, from: Data(encodedEgress.utf8)).flows == observed.flows, "Egress JSON did not round trip")
+    for invalid in [egressFirst, egressHeader + egressHeader, egressFirst + egressDelta.replacingOccurrences(of: "100,200,\n", with: "bad,200,\n"),
+                    egressFirst + egressDelta.replacingOccurrences(of: "Surge.401", with: "invalid-process"), egressFirst + "\"unterminated\n"] {
+        try rejects { _ = try EgressObservation.parse(invalid, surgeInterface: "utun108", surgePID: 401) }
+    }
+    for address in ["10.0.0.1", "127.0.0.1", "169.254.1.1", "172.16.0.1", "192.168.1.1", "100.64.0.1", "198.18.1.1",
+                    "192.0.2.1", "198.51.100.1", "203.0.113.1", "224.0.0.251", "::1", "fe80::1", "fd00::1", "ff02::1", "2001:db8::1", "not-an-ip"] {
+        try check(!EgressObservation.isPublicAddress(address), "Non-public egress address was reported as public: \(address)")
+    }
+    for address in ["1.1.1.1", "8.8.8.8", "2001:4860::8888", "::ffff:1.1.1.1", "64:ff9b::101:101"] {
+        try check(EgressObservation.isPublicAddress(address), "Public egress address was silently missed: \(address)")
+    }
+    var egressHistory = EgressHistory()
+    try check(egressHistory.newActivity(observed.flows, now: 10).count == 6, "First egress evidence was suppressed")
+    try check(egressHistory.newActivity(observed.flows, now: 11).isEmpty, "Unchanged egress flooded the event log")
+    try check(egressHistory.newActivity(observed.flows, now: 310).count == 6, "Continued egress could never be recorded again")
+    let churn = (1...25).map { index -> EgressFlow in var flow = observed.flows[0]; flow.pid = Int32(index); return flow }
+    try check(egressHistory.newActivity(churn, now: 311).count == 20, "Egress batch did not bound connection churn")
+    var egressDetails = try JSONSerialization.jsonObject(with: Data(encodedEgress.utf8)) as! [String: Any]
+    egressDetails["flows"] = (egressDetails["flows"] as! [[String: Any]]).map { value in
+        var value = value; value["process_kind"] = "system_extension"; return value
+    }
+    let egressRecord: [String: Any] = ["event": "egress_path_observed", "details": egressDetails]
+    let egressLine = String(decoding: try JSONSerialization.data(withJSONObject: egressRecord), as: UTF8.self)
+    try check(LogReader.format(egressLine).contains("系统扩展") && LogReader.format(egressLine).contains("200 字节") &&
+              LogReader.format(egressLine).contains("en0"), "Readable egress log lost classification or evidence")
+    try check(LogReader.format(egressLine, json: true).contains("remote_endpoint"), "Machine egress log lost endpoint evidence")
+    let discoveryDelta = egressHeader + "Discovery Service.402,,,0,0,\n" +
+        "udp6 *.5353<->*.*,awdl0,,45,0,\n" +
+        "udp4 *:5353<->*:*,en0,,267,0,\n" +
+        "Example Player.403,,,0,0,\n" +
+        "udp6 *.5353<->*.*,awdl0,,0,45,\n" +
+        "udp4 *:5353<->*:*,en0,,267,45,\n" +
+        "udp4 *:60000<->*:*,en0,,297,125,\n" +
+        "udp6 *.5353<->*.*,llw0,,45,45,\n"
+    let discovery = try EgressObservation.parse(egressFirst + discoveryDelta, surgeInterface: "utun108", surgePID: 401)
+    let discoveryDetails = try JSONSerialization.jsonObject(with: Data(JSON.encode(discovery).utf8))
+    let discoveryRecord: [String: Any] = ["event": "egress_path_observed", "details": discoveryDetails]
+    let discoveryLine = String(decoding: try JSONSerialization.data(withJSONObject: discoveryRecord, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+    let discoveryHuman = LogReader.format(discoveryLine)
+    try check(discovery.flows.count == 6 && discovery.flows.allSatisfy({ $0.destinationScope == "unresolved" }),
+              "A local service port falsely established a known remote destination")
+    try check(discoveryHuman.contains("仅有接收计数") && discoveryHuman.contains("有发送计数") &&
+              discoveryHuman.contains("本地端点：*:60000") && discoveryHuman.contains("本地端点：*.5353") &&
+              discoveryHuman.components(separatedBy: "mDNS 常用端口").count - 1 == 5 &&
+              discoveryHuman.components(separatedBy: "无法区分局域网与公网").count - 1 == 6,
+              "Unknown UDP evidence lost direction, local endpoint or qualified service-port hint")
+    for human in [discoveryHuman, LogReader.format(egressLine)] {
+        try check(human.contains("未验证数据包实际路径") && human.contains("nettop 报告接口") &&
+                  !human.contains("公网直出") && !human.contains("已确认绕过"),
+                  "Socket/interface counters were presented as proof of the actual packet path")
+    }
+    try check(LogReader.format(discoveryLine, json: true) == discoveryLine,
+              "Human evidence correction rewrote the original machine record")
+    let timingRecord: [String: Any] = ["event": "gate_changed", "time": "2026-01-01T00:00:00.123Z", "message": "signed Surge process missing",
+                                     "details": ["exit_event_to_block_verified_ms": 22.5]]
+    let timingLine = String(decoding: try JSONSerialization.data(withJSONObject: timingRecord), as: UTF8.self)
+    try check(LogReader.format(timingLine).contains("00.123") && LogReader.format(timingLine).contains("22.5 毫秒"), "Exit-event timing or millisecond timestamp lost in readable logs")
+    print("PASS: sampled egress uses new byte activity, separates Surge/local/unknown sockets and retains bounded deduplicated evidence")
+
     let atomicDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("surge-atomic-test-" + UUID().uuidString)
     do {
         try UserPaths.prepare(atomicDirectory.path)

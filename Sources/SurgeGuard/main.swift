@@ -14,6 +14,7 @@ final class Daemon {
     var signals: [DispatchSourceSignal] = []
     var trustedSurgePID: pid_t?
     var surgeExitSource: DispatchSourceProcess?
+    var surgeExitDetectedAt: Double?
     var nextSurgeSearch: Double = 0
     var nextFirewallAudit: Double = 0
     let runID = UUID().uuidString
@@ -28,6 +29,11 @@ final class Daemon {
     var nextPublish: Double = 0
     var lastProbeError = ""
     var lastRoutes = ""
+    var egressSampling = false
+    var nextEgressSample: Double = 0
+    var nextEgressSummary: Double = 0
+    var egressHistory = EgressHistory()
+    var egressFailure = ""
 
     init() throws {
         lock = try RuntimeLock()
@@ -53,6 +59,7 @@ final class Daemon {
         let exitSource = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
         exitSource.setEventHandler { [weak self] in
             guard let self, self.trustedSurgePID == pid else { return }
+            self.surgeExitDetectedAt = SystemClock.seconds
             self.trustedSurgePID = nil
             self.surgeExitSource?.cancel()
             self.surgeExitSource = nil
@@ -121,6 +128,7 @@ final class Daemon {
     }
 
     func reconcile(forceFirewallAudit: Bool = false) {
+        defer { surgeExitDetectedAt = nil }
         do {
             firewall.rememberAddresses()
             let now = SystemClock.seconds
@@ -184,6 +192,11 @@ final class Daemon {
             }
             if reason != lastReason {
                 var details: [String: Any] = ["run_id": runID, "mode": config?.mode ?? "invalid", "pf": ready ? "allowed" : "blocked"]
+                if !ready, let detected = surgeExitDetectedAt {
+                    details["surge_exit_event_uptime"] = detected
+                    details["block_verified_uptime"] = firewallVerified
+                    details["exit_event_to_block_verified_ms"] = max(0, (firewallVerified - detected) * 1000)
+                }
                 if let session, let encoded = try? JSON.encode(session.routes) {
                     details["routes"] = try? JSONSerialization.jsonObject(with: Data(encoded.utf8))
                 }
@@ -196,6 +209,61 @@ final class Daemon {
             catch { EventLog.write("pf_unverified", level: "critical", message: "Cannot verify blocking: \(error)") }
             try? FileManager.default.removeItem(atPath: Paths.snapshot)
             exit(1)
+        }
+    }
+
+    func observeEgress() {
+        let now = SystemClock.seconds
+        guard !egressSampling, now >= nextEgressSample else { return }
+        egressSampling = true
+        nextEgressSample = now + 30
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try EgressObservation.collect() }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.egressSampling = false
+                switch result {
+                case .failure(let error):
+                    let reason = String(describing: error)
+                    if reason != self.egressFailure {
+                        EventLog.write("egress_observation_failed", level: "warning", message: reason,
+                                       details: ["run_id": self.runID, "impact": "egress_observation_unavailable; firewall_policy_unchanged"])
+                    }
+                    self.egressFailure = reason
+                case .success(let sample):
+                    let now = SystemClock.seconds
+                    if !self.egressFailure.isEmpty {
+                        EventLog.write("egress_observation_recovered", message: "Passive egress sampling recovered", details: ["run_id": self.runID])
+                    }
+                    self.egressFailure = ""
+                    let flows = self.egressHistory.newActivity(sample.flows, now: now)
+                    for category in ["public_application", "system_extension", "local_or_unresolved"] {
+                        let selected = flows.filter {
+                            let categoryOfFlow = $0.processKind == "system_extension" ? "system_extension" :
+                                ($0.destinationScope == "public" ? "public_application" : "local_or_unresolved")
+                            return categoryOfFlow == category
+                        }
+                        guard !selected.isEmpty else { continue }
+                        var evidence = sample; evidence.flows = selected
+                        if var details = (try? JSON.encode(evidence)).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) }) as? [String: Any] {
+                            details["run_id"] = self.runID
+                            details["guard_state_at_log"] = self.allowed ? "allowed" : "blocked"
+                            details["total_observed_flows"] = sample.flows.count
+                            details["category"] = category
+                            EventLog.write("egress_path_observed", level: category == "public_application" ? "warning" : "info",
+                                           message: "Socket activity on an interface other than Surge VIF; inspect destination and network role", details: details)
+                        }
+                    }
+                    if now >= self.nextEgressSummary {
+                        self.nextEgressSummary = now + 300
+                        EventLog.write("egress_observation_summary", message: "Sampling is active; absence of findings is not proof of no bypass",
+                                       details: ["run_id": self.runID, "sample_interval_seconds": 30, "sample_seconds": sample.sampleSeconds,
+                                                 "observed_flows": sample.flows.count, "unresolved_active_sockets": sample.unresolvedActiveSockets,
+                                                 "unattributed_active_sockets": sample.unattributedActiveSockets, "unmeasured_sockets": sample.unmeasuredSockets,
+                                                 "scope": sample.scope])
+                    }
+                }
+            }
         }
     }
 
@@ -217,7 +285,10 @@ final class Daemon {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
         // Network/process events are primary; a 0.5 s fallback covers
         // missed readiness events, while PF integrity is audited every 5 s.
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.reconcile() }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.reconcile()
+            self?.observeEgress()
+        }
         for number in [SIGTERM, SIGINT, SIGHUP] {
             signal(number, SIG_IGN)
             let handler = DispatchSource.makeSignalSource(signal: number, queue: .main)
