@@ -72,6 +72,33 @@ do {
     try check(LogReader.format(egressLine).contains("系统扩展") && LogReader.format(egressLine).contains("200 字节") &&
               LogReader.format(egressLine).contains("en0"), "Readable egress log lost classification or evidence")
     try check(LogReader.format(egressLine, json: true).contains("remote_endpoint"), "Machine egress log lost endpoint evidence")
+    let discoveryDelta = egressHeader + "Discovery Service.402,,,0,0,\n" +
+        "udp6 *.5353<->*.*,awdl0,,45,0,\n" +
+        "udp4 *:5353<->*:*,en0,,267,0,\n" +
+        "Example Player.403,,,0,0,\n" +
+        "udp6 *.5353<->*.*,awdl0,,0,45,\n" +
+        "udp4 *:5353<->*:*,en0,,267,45,\n" +
+        "udp4 *:60000<->*:*,en0,,297,125,\n" +
+        "udp6 *.5353<->*.*,llw0,,45,45,\n"
+    let discovery = try EgressObservation.parse(egressFirst + discoveryDelta, surgeInterface: "utun108", surgePID: 401)
+    let discoveryDetails = try JSONSerialization.jsonObject(with: Data(JSON.encode(discovery).utf8))
+    let discoveryRecord: [String: Any] = ["event": "egress_path_observed", "details": discoveryDetails]
+    let discoveryLine = String(decoding: try JSONSerialization.data(withJSONObject: discoveryRecord, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+    let discoveryHuman = LogReader.format(discoveryLine)
+    try check(discovery.flows.count == 6 && discovery.flows.allSatisfy({ $0.destinationScope == "unresolved" }),
+              "A local service port falsely established a known remote destination")
+    try check(discoveryHuman.contains("仅有接收计数") && discoveryHuman.contains("有发送计数") &&
+              discoveryHuman.contains("本地端点：*:60000") && discoveryHuman.contains("本地端点：*.5353") &&
+              discoveryHuman.components(separatedBy: "mDNS 常用端口").count - 1 == 5 &&
+              discoveryHuman.components(separatedBy: "无法区分局域网与公网").count - 1 == 6,
+              "Unknown UDP evidence lost direction, local endpoint or qualified service-port hint")
+    for human in [discoveryHuman, LogReader.format(egressLine)] {
+        try check(human.contains("未验证数据包实际路径") && human.contains("nettop 报告接口") &&
+                  !human.contains("公网直出") && !human.contains("已确认绕过"),
+                  "Socket/interface counters were presented as proof of the actual packet path")
+    }
+    try check(LogReader.format(discoveryLine, json: true) == discoveryLine,
+              "Human evidence correction rewrote the original machine record")
     let timingRecord: [String: Any] = ["event": "gate_changed", "time": "2026-01-01T00:00:00.123Z", "message": "signed Surge process missing",
                                      "details": ["exit_event_to_block_verified_ms": 22.5]]
     let timingLine = String(decoding: try JSONSerialization.data(withJSONObject: timingRecord), as: UTF8.self)

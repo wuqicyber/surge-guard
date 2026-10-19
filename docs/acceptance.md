@@ -87,6 +87,9 @@ first. With separately authorized traffic to a controlled endpoint, confirm a
 non-Surge interface's byte increments are recorded with process/PID and scope;
 normal Surge-owned egress and loopback are excluded. Check system-extension and
 LAN/unknown-UDP classifications without treating them as implicitly approved.
+Confirm receive-only records are labeled, local endpoints remain visible and
+wildcard UDP peers stay unknown even on local port 5353. Neither interface labels
+nor counters should be displayed as proof of an actual packet path or bypass.
 Confirm repeated connections are deduplicated, a summary appears within five
 minutes, and command failure/recovery does not change PF or gate policy. Do not
 generate a bypass or bind a physical interface on an unsaved production session

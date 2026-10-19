@@ -59,6 +59,9 @@ Read README.md first. It is the operational contract for all three components.
 - Egress observations are passive evidence, never inputs to PF permission.
   Use the second nettop delta frame, expose missing counters/interfaces/UDP peers,
   and separate system-extension/local activity from public application warnings.
+  Reported socket interfaces do not verify packet paths. Label receive-only
+  records; wildcard UDP peers stay unknown even on a known service port. Never
+  describe these counters as confirmed public direct traffic or proof of bypass.
   No observations is not a no-bypass claim; keep the sampler asynchronous and
   bounded, and retain JSON evidence/deduplication and failure/recovery events.
 

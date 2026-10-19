@@ -50,7 +50,7 @@ enum SwiftBar {
             lines.append("\(depth) \(title) | bash=\(parameter(executable)) " + parameters.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true")
         }
         command("重新检查条件", ["check"])
-        command("检查网络出口（只读采样）", ["observe-egress"])
+        command("查看连接采样（只读）", ["observe-egress"])
         command("查看完整诊断", ["doctor"], root: true)
         command("查看最近 200 条日志", ["logs"], root: true)
         if FileManager.default.isExecutableFile(atPath: actionHelper) { command("实时跟踪日志", ["follow-logs"], root: true) }

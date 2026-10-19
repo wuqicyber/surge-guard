@@ -364,13 +364,18 @@ See [troubleshooting](docs/troubleshooting.md).
 
 The updated daemon also samples socket activity for about one second every
 30 seconds using the fixed system `nettop` command in a background task. It logs
-`egress_path_observed` when bytes change on an interface other than Surge VIF,
-excluding the verified Surge process and loopback. Evidence includes PID/process,
-interface, endpoints and **new bytes in the sample**, not lifetime counters.
-Ordinary public application traffic is a warning; system extensions, local/reserved
-destinations and unknown UDP targets are separate informational records. This
-classification never approves another VPN or changes PF. No product, interface
-number or user-specific exception is hardcoded.
+`egress_path_observed` when socket counters change and the **reported interface**
+differs from Surge VIF, excluding the verified Surge process and loopback.
+Evidence includes PID/process, reported interface, local/remote endpoints and
+**new bytes in the sample**, not lifetime counters. These are socket observations,
+not captured packets: the interface field does not establish the actual packet
+path or prove bypass. A public application record is flagged for review, not a
+confirmed direct connection. Receive-only records are labeled separately from
+records with sent bytes. A wildcard UDP peer is unknown, not a public destination.
+Local UDP port 5353 suggests mDNS but cannot establish that record's destination
+or path. System-extension identity does not approve an independent network.
+Classification never changes PF; no product, interface number or user-specific
+exception is hardcoded.
 
 The same connection is deduplicated for five minutes, with at most 20 new evidence
 records per sample and a five-minute summary. Existing private 1 MiB rotation
@@ -379,7 +384,7 @@ as coverage gaps. Command/parsing failures generate an observation-unavailable
 event and recovery is recorded; observation failure never changes network policy.
 Short-lived connections between samples, packet-level enforcement and complete
 historical reconstruction are **not covered**. No events is not proof of no bypass.
-SwiftBar provides **检查网络出口（只读采样）** and the existing log actions show this
+SwiftBar provides **查看连接采样（只读）** and the existing log actions show this
 evidence. Background logging starts only after the updated system guard is installed;
 updating the user renderer alone adds the manual check, not background observation.
 

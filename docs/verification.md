@@ -319,8 +319,9 @@ rollback, sleep, power loss and OS shutdown acceptance remain unperformed.
 - Ran the new release and installed user-renderer samples without external test
   requests. Both parse the real output, expose visibility gaps and distinguish
   independently running system-extension traffic from application candidates.
-  Samples did not identify public application egress outside Surge during those
-  intervals; they are not an exhaustive historical or packet-level audit.
+  Samples contained no records combining a public peer with a non-extension
+  application during those intervals. Socket interface labels do not establish
+  packet paths; this was not a historical or packet-level bypass audit.
 - Updated the user renderer/recovery components using recovery-only installation,
   retaining its backup. The isolated combined-section output has the new manual
   egress action and both recovery entries. Refreshed SwiftBar without restarting
@@ -334,3 +335,32 @@ is unavailable and interactive administrator verification was not completed.
 Background observer persistence, root process visibility, exit-event timing,
 controlled bypass/traffic blocking and restart/rollback/power scenarios remain
 unperformed. Installing only the user renderer does not enable background logs.
+
+## Correct socket evidence wording — 2026-10-19
+
+- The operator has since installed the preceding observer build. Before this
+  correction its installed and local release hashes matched; fresh read-only
+  status reported allowed with the configured routing check passing. Unified-log
+  mirrors from the running daemon include observer summaries and activity events.
+  This confirms the observer is running, not that packet paths were audited;
+  complete private root event files were not read in this phase.
+- Corrected misleading human wording shared by historical log rendering and the
+  manual sample. The renderer identifies reported socket interfaces, shows both
+  endpoints and distinguishes receive-only activity from sent-byte counters.
+  Wildcard UDP peers stay unknown. Local UDP port 5353 is only an mDNS hint;
+  neither the port nor the interface label proves a destination or packet path.
+  Original machine JSON, counters, sampling and firewall decisions are unchanged.
+- All 31 standalone groups, warnings-as-errors release builds and shell checks
+  pass. A focused six-record generic fixture covers wildcard IPv4/IPv6 UDP,
+  receive-only records, a high local port and qualified service-port hints. It
+  rejects confirmed-bypass/public-direct wording and verifies JSON preservation.
+- Updated only the user renderer/recovery components after backing them up and
+  refreshed SwiftBar. Its isolated menu offers the renamed read-only connection
+  sample; the installed UI hash matches the new release. A real installed-renderer
+  sample shows unknown-peer receive-only records with local UDP port 5353, and
+  the JSON command remains parseable. The new wording also renders old records
+  without rewriting logs or replacing the running system daemon.
+
+No service restart, PF mutation, external target request or intentional bypass
+was performed. Packet capture/path verification, exit-to-block latency and the
+previously listed disruptive/power acceptance scenarios remain unperformed.

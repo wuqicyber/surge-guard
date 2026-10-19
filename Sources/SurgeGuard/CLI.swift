@@ -122,11 +122,13 @@ enum CLI {
             let report = try EgressObservation.collect()
             if args.contains("--json") { print(try JSON.encode(report)) }
             else {
-                if report.flows.isEmpty { print("本次采样未观察到可归属的其他接口活动；不代表历史或采样间隔内没有绕过。") }
+                if report.flows.isEmpty { print("本次采样没有可展示的其他接口 socket 记录；覆盖缺口见下方。这不能确认历史或采样间隔内是否绕过。") }
                 else {
                     let details = try JSONSerialization.jsonObject(with: Data(JSON.encode(report).utf8))
+                    let timestamp = ISO8601DateFormatter()
+                    timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                     let event: [String: Any] = ["event": "egress_path_observed", "component": "SurgeGuard", "details": details,
-                                              "time": ISO8601DateFormatter().string(from: report.sampledAt)]
+                                              "time": timestamp.string(from: report.sampledAt)]
                     print(LogReader.format(String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self)))
                 }
                 print("采样缺口：目标未知 \(report.unresolvedActiveSockets)，接口未知 \(report.unattributedActiveSockets)，无计数 \(report.unmeasuredSockets)。只读，不修改防火墙。")
