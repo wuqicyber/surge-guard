@@ -194,7 +194,7 @@ final class Daemon {
                 }
                 firewallVerified = SystemClock.seconds
             }
-            let observation: Readiness?
+            var observation: Readiness?
             var probeFailure: String?
             do { observation = try Probe.readiness(trustedProcess: surgeProcessTrusted()) }
             catch { observation = nil; probeFailure = String(describing: error) }
@@ -230,6 +230,16 @@ final class Daemon {
                     if session.routes.count != config?.routeChecks.count { reasons.append("incomplete_route_results") }
                 }
             }
+            if !allowed, reasons.isEmpty, observation?.ready == true, config != nil {
+                firewall.recordBlockedTraffic(phase: "before_allow")
+                // Optional evidence collection must not reopen using stale readiness or route results.
+                do {
+                    observation = try Probe.readiness(trustedProcess: surgeProcessTrusted())
+                    reasons.append(contentsOf: observation?.reasons ?? [])
+                    if let loss = try watchSurgeConnection(), !reasons.contains(loss) { reasons.append(loss) }
+                } catch { reasons.append("readiness_probe_failed: \(error)") }
+                if config?.mode == "routes", SystemClock.seconds - sessionChecked >= 3 { reasons.append("rule_probe_expired") }
+            }
             let ready = reasons.isEmpty && observation?.ready == true && config != nil
             if ready != allowed {
                 if ready { try firewall.allow() }
@@ -257,6 +267,7 @@ final class Daemon {
                 EventLog.write("gate_changed", level: ready ? "info" : "warning", message: reason, details: details)
                 lastReason = reason
             }
+            if !allowed { firewall.recordBlockedTraffic() }
         } catch {
             EventLog.write("reconciliation_failed", level: "error", message: "\(error). Blocking before launchd restart", details: ["run_id": runID])
             do { try firewall.block(); EventLog.write("fail_closed", message: "Block rules verified before restart") }
@@ -271,6 +282,10 @@ final class Daemon {
         guard !egressSampling, now >= nextEgressSample else { return }
         egressSampling = true
         nextEgressSample = now + 30
+        let stateAtStart = allowed ? "allowed" : "blocked"
+        let trackingStarted = now
+        let revisionAtStart = firewall.revision
+        let blockIDAtStart = firewall.blockID
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Result { try EgressObservation.collect() }
             DispatchQueue.main.async {
@@ -284,27 +299,35 @@ final class Daemon {
                                        details: ["run_id": self.runID, "impact": "egress_observation_unavailable; firewall_policy_unchanged"])
                     }
                     self.egressFailure = reason
-                case .success(let sample):
+                case .success(var sample):
                     let now = SystemClock.seconds
                     if !self.egressFailure.isEmpty {
                         EventLog.write("egress_observation_recovered", message: "Passive egress sampling recovered", details: ["run_id": self.runID])
                     }
                     self.egressFailure = ""
-                    let flows = self.egressHistory.newActivity(sample.flows, now: now)
-                    for category in ["public_application", "system_extension", "local_or_unresolved"] {
-                        let selected = flows.filter {
-                            let categoryOfFlow = $0.processKind == "system_extension" ? "system_extension" :
-                                ($0.destinationScope == "public" ? "public_application" : "local_or_unresolved")
-                            return categoryOfFlow == category
-                        }
+                    sample.guardStateAtStart = stateAtStart
+                    sample.guardStateAtEnd = self.allowed ? "allowed" : "blocked"
+                    sample.guardStateDuringSample = revisionAtStart == self.firewall.revision ? stateAtStart : "changed"
+                    sample.guardTrackingStartedUptime = trackingStarted
+                    sample.guardTrackingCompletedUptime = now
+                    let context = "\(self.firewall.revision)|\(sample.guardStateDuringSample!)"
+                    let flows = self.egressHistory.newActivity(sample.flows, now: now, context: context)
+                    for category in EgressFlow.categories {
+                        let selected = flows.filter { $0.category == category }
                         guard !selected.isEmpty else { continue }
                         var evidence = sample; evidence.flows = selected
                         if var details = (try? JSON.encode(evidence)).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) }) as? [String: Any] {
                             details["run_id"] = self.runID
                             details["guard_state_at_log"] = self.allowed ? "allowed" : "blocked"
+                            details["firewall_revision_start"] = revisionAtStart
+                            details["firewall_revision_end"] = self.firewall.revision
+                            details["pf_block_id_start"] = blockIDAtStart
+                            details["pf_block_id_end"] = self.firewall.blockID
                             details["total_observed_flows"] = sample.flows.count
+                            details["deduplicated_flows"] = self.egressHistory.deduplicated
+                            details["limited_flows"] = self.egressHistory.limited
                             details["category"] = category
-                            EventLog.write("egress_path_observed", level: category == "public_application" ? "warning" : "info",
+                            EventLog.write("egress_path_observed", level: category == "public_send_review" ? "warning" : "info",
                                            message: "Socket activity on an interface other than Surge VIF; inspect destination and network role", details: details)
                         }
                     }
@@ -314,6 +337,9 @@ final class Daemon {
                                        details: ["run_id": self.runID, "sample_interval_seconds": 30, "sample_seconds": sample.sampleSeconds,
                                                  "observed_flows": sample.flows.count, "unresolved_active_sockets": sample.unresolvedActiveSockets,
                                                  "unattributed_active_sockets": sample.unattributedActiveSockets, "unmeasured_sockets": sample.unmeasuredSockets,
+                                                 "category_counts": Dictionary(uniqueKeysWithValues: EgressFlow.categories.map { category in
+                                                     (category, sample.flows.filter { $0.category == category }.count)
+                                                 }), "deduplicated_flows": self.egressHistory.deduplicated, "limited_flows": self.egressHistory.limited,
                                                  "scope": sample.scope])
                     }
                 }

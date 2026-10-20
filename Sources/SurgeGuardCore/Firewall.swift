@@ -82,10 +82,54 @@ public final class RuntimeLock {
     deinit { close(descriptor) }
 }
 
+public struct PFBlockCounters: Codable, Equatable {
+    public let packets: UInt64
+    public let bytes: UInt64
+    public let inPackets: UInt64
+    public let inBytes: UInt64
+    public let outPackets: UInt64
+    public let outBytes: UInt64
+
+    public static func parse(_ output: String) throws -> PFBlockCounters {
+        // macOS pfctl -s labels: label, evaluations, total packets/bytes, in packets/bytes, out packets/bytes.
+        let rows = output.split(separator: "\n").map { $0.split(whereSeparator: { $0.isWhitespace }) }
+            .filter { $0.first == "surge-guard-block" }
+        guard rows.count == 1, rows[0].count == 8 else { throw GuardError("Missing or ambiguous PF block counters") }
+        let numbers = rows[0].dropFirst().compactMap { UInt64($0) }
+        guard numbers.count == 7 else { throw GuardError("Malformed PF block counters") }
+        let packets = numbers[3].addingReportingOverflow(numbers[5])
+        let bytes = numbers[4].addingReportingOverflow(numbers[6])
+        guard !packets.overflow, !bytes.overflow, packets.partialValue == numbers[1], bytes.partialValue == numbers[2] else {
+            throw GuardError("Inconsistent PF block counters")
+        }
+        return PFBlockCounters(packets: numbers[1], bytes: numbers[2], inPackets: numbers[3], inBytes: numbers[4],
+                               outPackets: numbers[5], outBytes: numbers[6])
+    }
+
+    public func delta(since previous: PFBlockCounters?) throws -> PFBlockCounters {
+        guard let previous else { return self }
+        guard packets >= previous.packets, bytes >= previous.bytes, inPackets >= previous.inPackets,
+              inBytes >= previous.inBytes, outPackets >= previous.outPackets, outBytes >= previous.outBytes else {
+            throw GuardError("PF block counters decreased; observation continuity lost")
+        }
+        return PFBlockCounters(packets: packets - previous.packets, bytes: bytes - previous.bytes,
+                               inPackets: inPackets - previous.inPackets, inBytes: inBytes - previous.inBytes,
+                               outPackets: outPackets - previous.outPackets, outBytes: outBytes - previous.outBytes)
+    }
+}
+
 public final class Firewall {
     private var knownAddresses = Set<String>()
     private var expectedRules: String?
     private let tokenPath = Paths.runtime + "/pf-token"
+    public private(set) var revision = 0
+    public private(set) var blockID: String?
+    private var blockStarted: Double = 0
+    private var blockCounters: PFBlockCounters?
+    private var blockCountersSampled: Double?
+    private var blockCounterFailure = ""
+    private var blockCounterContinuity = true
+    private var nextBlockCounterSample: Double = 0
 
     public init() {}
 
@@ -166,6 +210,7 @@ public final class Firewall {
         try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"],
                             input: Policy.blocked, timeout: 5)
         let rulesLoaded = SystemClock.seconds
+        revision += 1
         try ensureEnabled()
         let actual = try readRules()
         guard actual.contains("surge-guard-block") else { throw GuardError("Block rule did not load") }
@@ -177,17 +222,68 @@ public final class Firewall {
         }
         knownAddresses = Set(Probe.addresses().filter { !$0.loopback }.map(\.address))
         expectedRules = actual
-        return (rulesLoaded, SystemClock.seconds)
+        let cleared = SystemClock.seconds
+        if let blockID {
+            EventLog.write("pf_block_observation_gap", level: "warning", message: "Rules reloaded before final counter read",
+                           details: ["block_id": blockID, "reason": "rules_reloaded", "last_totals_only": true])
+        }
+        blockID = UUID().uuidString
+        blockStarted = rulesLoaded
+        blockCounters = nil
+        blockCountersSampled = nil
+        blockCounterFailure = ""
+        blockCounterContinuity = true
+        nextBlockCounterSample = 0
+        return (rulesLoaded, cleared)
     }
 
     public func allow() throws {
         try ensureEnabled()
         try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"], timeout: 5)
+        revision += 1
         let actual = try readRules()
         guard actual.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw GuardError("Surge Guard rules were not cleared")
         }
         expectedRules = actual
+        blockID = nil
+    }
+
+    public func recordBlockedTraffic(phase: String = "periodic") {
+        guard let blockID else { return }
+        let now = SystemClock.seconds
+        guard phase != "periodic" || now >= nextBlockCounterSample else { return }
+        nextBlockCounterSample = now + 5
+        do {
+            let output = try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-s", "labels"], timeout: 1)
+            let counters = try PFBlockCounters.parse(output)
+            let delta = try counters.delta(since: blockCounters)
+            let baseline = blockCountersSampled ?? (blockCounterContinuity ? blockStarted : nil)
+            let recovered = !blockCounterFailure.isEmpty
+            blockCounterFailure = ""
+            blockCounters = counters
+            blockCountersSampled = SystemClock.seconds
+            guard delta.packets > 0 || phase != "periodic" || recovered else { return }
+            let totals = try JSONSerialization.jsonObject(with: Data(JSON.encode(counters).utf8))
+            let changes = try JSONSerialization.jsonObject(with: Data(JSON.encode(delta).utf8))
+            var details: [String: Any] = ["block_id": blockID, "block_started_uptime": blockStarted,
+                                     "counter_sampled_uptime": blockCountersSampled!, "phase": phase,
+                                     "anchor": Policy.anchor, "label": "surge-guard-block", "totals": totals, "delta": changes,
+                                     "delta_has_baseline": baseline != nil,
+                                     "counter_continuity": blockCounterContinuity, "scope": "own_pf_block_rule_counters"]
+            details["delta_baseline_uptime"] = baseline
+            EventLog.write("pf_block_traffic", message: "PF block rule packet counters; endpoints and processes not captured", details: details)
+        } catch {
+            let reason = String(describing: error)
+            if reason != blockCounterFailure || phase != "periodic" {
+                EventLog.write("pf_block_observation_failed", level: "warning", message: reason,
+                               details: ["block_id": blockID, "phase": phase, "impact": "traffic_evidence_unavailable; firewall_policy_unchanged"])
+            }
+            blockCounterFailure = reason
+            blockCounterContinuity = false
+            blockCounters = nil
+            blockCountersSampled = nil
+        }
     }
 
     public func unlock() throws {

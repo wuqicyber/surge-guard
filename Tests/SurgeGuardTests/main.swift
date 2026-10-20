@@ -106,6 +106,66 @@ do {
     try check(LogReader.format(timingLine).contains("00.123") && LogReader.format(timingLine).contains("22.5 毫秒"), "Exit-event timing or millisecond timestamp lost in readable logs")
     print("PASS: sampled egress uses new byte activity, separates Surge/local/unknown sockets and retains bounded deduplicated evidence")
 
+    var sending = observed.flows.first(where: { $0.destinationScope == "public" })!
+    var receiving = sending; receiving.sentBytes = 0
+    var extensionFlow = sending; extensionFlow.processKind = "system_extension"
+    try check(sending.category == "public_send_review" && receiving.category == "public_receive_only" &&
+              extensionFlow.category == "system_extension" && discovery.flows.allSatisfy({ $0.category == "unresolved_peer" }),
+              "Traffic evidence confused public sends, receive-only, independent extensions or unknown peers")
+    var transitions = EgressHistory()
+    try check(transitions.newActivity([receiving], now: 1, context: "allowed:1").count == 1, "Initial receiving evidence missing")
+    try check(transitions.newActivity([sending], now: 2, context: "allowed:1").count == 1, "Receive-to-send escalation was deduplicated away")
+    try check(transitions.newActivity([sending], now: 3, context: "allowed:1").isEmpty, "Identical evidence was repeated")
+    try check(transitions.newActivity([sending], now: 4, context: "blocked:2").count == 1, "Firewall transition hid repeated socket activity")
+    var unknownReceive = discovery.flows[0]; unknownReceive.sentBytes = 0
+    var unknownSend = unknownReceive; unknownSend.sentBytes = 45
+    try check(transitions.newActivity([unknownReceive], now: 5).count == 1 && transitions.newActivity([unknownSend], now: 6).count == 1,
+              "Unknown-peer receive-to-send escalation was hidden by dedup")
+    var bounded = EgressHistory()
+    _ = bounded.newActivity(churn, now: 1)
+    try check(bounded.limited == 5 && bounded.deduplicated == 0, "Evidence cap did not expose omitted new records")
+    _ = bounded.newActivity(churn, now: 2)
+    try check(bounded.limited == 0 && bounded.deduplicated == 20, "Capped evidence was marked as already recorded")
+    let receiveChurn = churn.map { flow -> EgressFlow in var flow = flow; flow.sentBytes = 0; return flow }
+    sending.pid = 900
+    var priority = EgressHistory()
+    try check(priority.newActivity(receiveChurn + [sending], now: 1).first?.pid == 900, "Receive-only activity crowded out public sending evidence")
+    var changedDetails = egressDetails
+    changedDetails["guard_state_at_start"] = "allowed"; changedDetails["guard_state_at_end"] = "blocked"
+    changedDetails["guard_state_during_sample"] = "changed"; changedDetails["guard_state_at_log"] = "blocked"
+    changedDetails["limited_flows"] = 3
+    let changedLine = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "egress_path_observed", "details": changedDetails]), as: UTF8.self)
+    let changedHuman = LogReader.format(changedLine)
+    try check(changedHuman.contains("采样关联窗口发生切换") && changedHuman.contains("不按结束状态归因整段流量") && changedHuman.contains("另有 3 条"),
+              "Mixed-state or capped sample was presented as complete blocked traffic")
+    try check(LogReader.format(egressLine).contains("未跟踪切换"), "Historical samples invented a verified firewall timeline")
+    print("PASS: traffic evidence escalations survive dedup, priority/caps are explicit and mixed-state samples remain unassigned")
+
+    let pfZero = try PFBlockCounters.parse("surge-guard-block 0 0 0 0 0 0 0\n")
+    let pfCount = try PFBlockCounters.parse("other-label 0 0 0 0 0 0 0\nsurge-guard-block 10 3 300 1 100 2 200\n")
+    try check(pfCount.packets == 3 && pfCount.bytes == 300 && pfCount.outPackets == 2 && pfCount.inPackets == 1 &&
+              pfCount.delta(since: pfZero) == pfCount && pfCount.delta(since: pfCount) == pfZero,
+              "Own PF label counters or directional deltas were misread")
+    for invalid in ["", "other-label 1 3 300 1 100 2 200", "surge-guard-block 10 3 300 1 100 2 200\nsurge-guard-block 10 3 300 1 100 2 200",
+                    "surge-guard-block 10 bad 300 1 100 2 200", "surge-guard-block 10 4 300 1 100 2 200",
+                    "surge-guard-block 10 3 300 1 100 2 200 0", "surge-guard-block 10 0 0 18446744073709551615 0 1 0"] {
+        try rejects { _ = try PFBlockCounters.parse(invalid) }
+    }
+    try rejects { _ = try pfZero.delta(since: pfCount) }
+    let countDetails: [String: Any] = ["block_id": "example-period", "phase": "before_allow", "counter_continuity": false, "delta_has_baseline": false,
+                                     "totals": try JSONSerialization.jsonObject(with: Data(JSON.encode(pfCount).utf8)),
+                                     "delta": try JSONSerialization.jsonObject(with: Data(JSON.encode(pfCount).utf8))]
+    let countLine = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "pf_block_traffic", "details": countDetails]), as: UTF8.self)
+    let countHuman = LogReader.format(countLine)
+    try check(countHuman.contains("3 包 / 300 字节") && countHuman.contains("入站 1 包，出站 2 包") &&
+              countHuman.contains("不能累加成完整历史") && countHuman.contains("未计入的命中") && countHuman.contains("零计数也不能证明没有绕过"),
+              "PF counter log lost direction, reset/read boundaries or evidence limits")
+    try check(countHuman.contains("基线未知，不能作为增量"), "Counter recovery invented an incremental baseline")
+    try check(LogReader.format(countLine, json: true).contains("out_packets"), "Machine PF counter evidence was lost")
+    let counterFailure = "{\"event\":\"pf_block_observation_failed\",\"message\":\"permission denied\",\"details\":{}}"
+    try check(LogReader.format(counterFailure).contains("原有防火墙策略不变"), "Counter read failure was confused with firewall failure")
+    print("PASS: PF counter evidence parses only the own label, preserves directions and rejects missing, reset, overflow or ambiguous data")
+
     let atomicDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("surge-atomic-test-" + UUID().uuidString)
     do {
         try UserPaths.prepare(atomicDirectory.path)

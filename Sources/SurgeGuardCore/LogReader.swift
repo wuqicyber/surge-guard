@@ -78,6 +78,8 @@ public enum LogReader {
                       "egress_path_observed": "socket 采样记录（实际路径未验证）",
                       "egress_observation_failed": "出口观测暂不可用", "egress_observation_recovered": "出口观测已恢复",
                       "egress_observation_summary": "出口观测摘要",
+                      "pf_block_traffic": "PF 阻断命中计数", "pf_block_observation_failed": "PF 阻断流量证据暂不可用",
+                      "pf_block_observation_gap": "PF 阻断计数记录不完整",
                       "application_restore_failed": "应用启动失败，保留待重试", "shutdown_started": "开始有序退出",
                       "shutdown_aborted": "关机已中止，会话已保留", "shutdown_requested": "已请求系统关机",
                       "legacy_migrated": "旧配置已迁移", "migration_app_unresolved": "旧应用名称需要补全 Bundle ID"]
@@ -128,16 +130,33 @@ public enum LogReader {
             }
             lines.append("  范围：这是守护处理耗时；未测量实际断开至事件收到的时间，也未验证逐包零绕过")
         } else if event == "egress_path_observed" {
-            lines.append("  观测：nettop 报告以下 socket 的字节计数增加；接口字段是工具报告值")
+            lines.append("  观测：nettop 报告以下 socket 的字节计数增加；接口字段是工具报告值，计数不作为链路总流量合计")
             lines.append("  结论：未验证数据包实际路径，不能据此确认绕过或确认全部经 Surge")
             lines.append("  影响：仅记录，不改变防火墙或联网状态")
+            if let started = details["sample_started_uptime"] as? Double, let ended = details["sample_completed_uptime"] as? Double {
+                lines.append("  采样命令耗时：\(String(format: "%.3f", max(0, ended - started))) 秒；字节增量取第二帧约 1 秒")
+            }
+            let states = ["allowed": "放行", "blocked": "阻断", "changed": "采样关联窗口发生切换", "unknown": "未跟踪切换"]
+            let during = details["guard_state_during_sample"] as? String ?? "unknown"
+            lines.append("  门禁关联：\(states[during] ?? "未知")（守护状态，不能据此认定采样字节已放行或已阻断）")
+            if during == "changed" {
+                lines.append("    开始：\(text(details["guard_state_at_start"])) → 结束：\(text(details["guard_state_at_end"]))；不按结束状态归因整段流量")
+                lines.append("    关联窗口包含后台任务排队与回调时间，可能比采样命令覆盖的时间更长")
+            }
             for flow in details["flows"] as? [[String: Any]] ?? [] {
                 let kinds = ["system_extension": "系统扩展", "application_or_service": "应用/服务", "unresolved": "身份待确认"]
                 let scopes = ["public": "远端为公网地址", "local_or_reserved": "远端为局域网/保留地址", "unresolved": "远端未知"]
                 let scope = flow["destination_scope"] as? String ?? "unresolved"
                 let sent = flow["sent_bytes"] as? UInt64, received = flow["received_bytes"] as? UInt64
                 let direction = sent == 0 && (received ?? 0) > 0 ? "仅有接收计数" : (sent ?? 0) > 0 ? "有发送计数" : "方向未确认"
+                let category = EgressFlow.category(kind: flow["process_kind"] as? String ?? "unresolved", scope: scope, sent: sent ?? 0)
+                let assessments = ["public_send_review": "公网发送线索，优先核对；尚未验证绕过",
+                                   "public_receive_only": "公网远端，仅接收；没有本次向外发送的计数证据",
+                                   "system_extension": "系统扩展活动，需结合独立网络判断；不等同普通应用绕过",
+                                   "local_or_reserved": "远端为局域网/保留地址，不作为公网绕过证据",
+                                   "unresolved_peer": "远端未知，保留原始线索，无法判断公网绕过"]
                 lines.append("  \(text(flow["process"]))（PID \(text(flow["pid"]))） · \(kinds[flow["process_kind"] as? String ?? ""] ?? "身份待确认") · \(scopes[scope] ?? "远端未知") · \(direction)")
+                lines.append("    分类：\(assessments[category]!)")
                 lines.append("    nettop 报告接口：\(text(flow["interface"]))  协议：\(text(flow["transport"]))")
                 lines.append("    本地端点：\(text(flow["local_endpoint"]))  远端原始值：\(text(flow["remote_endpoint"]))")
                 lines.append("    本次采样发送：\(text(flow["sent_bytes"])) 字节  接收：\(text(flow["received_bytes"])) 字节")
@@ -149,6 +168,33 @@ public enum LogReader {
                     lines.append("    线索：本地 UDP 5353 是 mDNS 常用端口；端口本身不能确认目标或路径")
                 }
             }
+            if let limited = details["limited_flows"] as? Int, limited > 0 {
+                lines.append("  记录上限：本次另有 \(limited) 条新记录未展开；不能视为已检查或没有活动")
+            }
+        } else if event == "pf_block_traffic" {
+            let totals = details["totals"] as? [String: Any] ?? [:]
+            let delta = details["delta"] as? [String: Any] ?? [:]
+            lines.append("  证据：本工具 PF 阻断规则的命中计数，入站与出站分别统计")
+            let deltaTitle = details["delta_has_baseline"] as? Bool == false ? "本次读数（基线未知，不能作为增量）" : "本次增量"
+            lines.append("  \(deltaTitle)：\(text(delta["packets"])) 包 / \(text(delta["bytes"])) 字节；入站 \(text(delta["in_packets"])) 包，出站 \(text(delta["out_packets"])) 包")
+            lines.append("  当前规则累计：\(text(totals["packets"])) 包 / \(text(totals["bytes"])) 字节；入站 \(text(totals["in_packets"])) 包，出站 \(text(totals["out_packets"])) 包")
+            lines.append("  阻断批次：\(text(details["block_id"]))；读取阶段：\(text(details["phase"]))")
+            if details["counter_continuity"] as? Bool == false {
+                lines.append("  连续性：本批次曾读取失败或计数回退；增量基线已重建，不能累加成完整历史")
+            }
+            if details["phase"] as? String == "before_allow" {
+                lines.append("  时间边界：这是准备放行前的读取；到实际清除规则之间仍可能有未计入的命中。是否放行见后续门禁日志")
+            }
+            lines.append("  范围：没有逐包进程、目标或内容；不能与 socket 采样逐条配对，零计数也不能证明没有绕过")
+        } else if event == "pf_block_observation_failed" || event == "pf_block_observation_gap" {
+            let causes = ["Rules reloaded before final counter read": "先加载阻断规则，未在重载前完成旧计数的最后读取",
+                          "Missing or ambiguous PF block counters": "未找到唯一的本工具 PF 阻断计数",
+                          "Malformed PF block counters": "PF 阻断计数字段无法解析",
+                          "Inconsistent PF block counters": "PF 入站、出站与总计数不一致",
+                          "PF block counters decreased; observation continuity lost": "PF 计数回退，可能被清零或规则被重载，连续性无法确认"]
+            lines.append("  原因：\(causes[message] ?? text(message))")
+            lines.append("  阻断批次：\(text(details["block_id"]))")
+            lines.append("  影响：阻断流量记录不完整；不能据此判断没有拦截或发生绕过，原有防火墙策略不变")
         } else if event == "egress_observation_failed" {
             lines.append("  原因：\(text(message))")
             lines.append("  影响：这段时间缺少出口观测证据；现有防火墙判断继续运行")
@@ -156,6 +202,10 @@ public enum LogReader {
             lines.append("  状态：后台每 \(text(details["sample_interval_seconds"])) 秒采样 \(text(details["sample_seconds"])) 秒")
             lines.append("  本次其他接口 socket 记录：\(text(details["observed_flows"])) 条；远端未解析的活动 socket：\(text(details["unresolved_active_sockets"])) 个")
             lines.append("  覆盖缺口：接口未知 \(text(details["unattributed_active_sockets"])) 个；无字节计数 \(text(details["unmeasured_sockets"])) 个")
+            if let counts = details["category_counts"] as? [String: Any] {
+                lines.append("  分类：公网发送待核对 \(text(counts["public_send_review"]))；公网仅接收 \(text(counts["public_receive_only"]))；系统扩展 \(text(counts["system_extension"]))；局域网/保留 \(text(counts["local_or_reserved"]))；远端未知 \(text(counts["unresolved_peer"]))")
+                lines.append("  本次去重 \(text(details["deduplicated_flows"])) 条；超过展开上限 \(text(details["limited_flows"])) 条（均不是整个五分钟的累计）")
+            }
             lines.append("  范围：TCP / UDP socket 计数与工具报告接口；未验证逐包路径，未发现记录不代表确认无绕过")
         } else if event == "gate_changed" {
             lines.append(message == "allowed" ? "  状态：普通联网已放行，配置条件与 PF 检查通过" : "  状态：普通联网已阻断，条件通过后自动恢复")

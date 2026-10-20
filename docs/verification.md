@@ -398,3 +398,46 @@ performed. Live reaction latency and old-state termination remain unverified.
 Allowed mode still clears this guard's anchor; this change improves reactive
 blocking and does not implement permanent packet-level no-bypass enforcement.
 The strict zero-window requirement is not established by these checks.
+
+## Traffic evidence and PF counter records — 2026-10-19
+
+- Before this phase, the operator installed the preceding native tunnel-loss
+  build. Read-only status still shows the same running daemon with all readiness
+  checks and the local routing policy passing. This is not packet-path proof.
+- Inspected a bounded recent window of the macOS guard-log mirror and ran new
+  read-only socket samples. Parsed observations had unresolved remote peers,
+  predominantly receive-only records with local UDP port 5353. No parsed record
+  established public application bypass. Some long mirror records were truncated;
+  non-interactive sudo could not read the complete private event files or live
+  PF counters. No historical all-clear or complete blocking count was inferred.
+- Split public sending candidates, public receive-only, system extensions,
+  local/reserved and unknown peers. Public sending evidence gets priority under
+  the existing batch cap. Dedup includes direction and firewall revision, so
+  receive-to-send changes and activity across gate transitions are recorded again.
+  Counts expose dedup/cap omissions. Samples retain command timing and conservative
+  state-tracking boundaries; a revision change prevents attributing the whole
+  interval to the final state. Manual/old records report tracking as unavailable.
+- Added read-only own-anchor PF label-counter reads while blocked and before
+  preparing to allow, with unique block IDs, in/out packet and byte counters,
+  deltas and monotonic boundaries. Missing/ambiguous/malformed/decreasing counters
+  generate evidence failures; reloads expose the missing tail. Baseline recovery
+  cannot silently turn cumulative counts into new bytes. Logging does not change
+  the rule text or treat observations as permission. Readiness and route freshness
+  are rechecked after the optional pre-allow counter query.
+- All 34 standalone groups, warnings-as-errors release builds, example validation
+  and shell checks pass. Focused fixtures cover receive-to-send dedup (including
+  unknown peers), state-context changes, priority/cap accounting, human/JSON
+  evidence boundaries, own-label parsing, in/out deltas, duplicate/missing labels,
+  invalid numbers, inconsistent totals, overflow and counter rollback.
+- Ran a real release sample without target requests. Its JSON timing fields parse
+  and the installed user formatter shows receive-only/unknown-peer evidence and
+  unavailable manual state tracking. Updated only user renderer/recovery files
+  with a local backup, checked the isolated menu and retained recovery/emergency
+  actions. Private combined-plugin content was not executed or published.
+
+The system daemon for this phase is not installed. No service restart, PF mutation,
+Surge disconnect, external target request or packet capture was performed.
+Live PF counter agreement, background transition association, blocking latency,
+restart/rollback/power scenarios and packet-by-packet coverage remain unverified.
+Counters omit any matches after the last read and before rule clearing; they do
+not identify individual processes/endpoints and cannot establish strict zero bypass.
