@@ -117,6 +117,30 @@ packet trace. A missing label, malformed output or decreasing count must produce
 an evidence gap/failure, not a zero-hit claim or an allow/block policy change.
 Unit fixtures cannot establish live counter accuracy or complete packet coverage.
 
+## Continuous recorder (separate opt-in)
+
+Read [the recorder contract](packet-audit.md). Install it only after the independent
+recovery menu is available. Confirm actual PKTAP packets contain expected physical
+and VIF interface/direction metadata, known-process traffic and unknown ownership
+without silently filtering the unknowns. Check that starting/stopping this job
+does not restart the guard or mutate PF. Verify fresh job/PID/boot-bound status
+and configured event/preview time zone.
+
+During an authorized controlled Surge restart, preserve packet/request/event
+time lines and verify recorder continuity separately from guard block latency.
+Do not generate an intentional bypass on an unsaved production session merely
+to pass this test. Confirm Surge CLI calls occur as the console user after UID
+drop and that absent Surge/session/query errors record gaps rather than stopping
+the PF gate or claiming an all-clear.
+
+Exercise capture-buffer loss, child exit/supervisor crash, incomplete statistics,
+disk write failure, stop/re-arm, update rollback and ring wrap. A recovered source
+must retain earlier gap flags. After crash, launchd must reap the capture child;
+the new session records a gap. Compare actual retained packet timestamps with
+`audit-coverage`, including truncated/live files and overwritten history. Review
+sleep, power loss, early boot and high-rate traffic separately. Offline fixtures
+and zero reported drops do not establish full packet coverage or no bypass.
+
 ## PF coexistence
 
 Capture root `pfctl -sr`, relevant nested anchors and PF references before installation. Confirm the guard attaches first, normal updates change only its anchor, and unlock releases only its own reference. Verify Internet Sharing, VM networking and other PF users if they are part of your setup. The initial main-ruleset reload deserves separate review.

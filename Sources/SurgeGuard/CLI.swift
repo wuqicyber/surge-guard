@@ -10,6 +10,14 @@ enum CLI {
       status [--json]                  Read the daemon's recent verified status
       doctor                          Explain conditions, configuration and service status
       observe-egress [--json]          Read-only socket/interface sample; not a no-bypass certificate
+      audit-status [--json]            Independent packet recorder status; never proof of no bypass
+      audit-request-sample             Normal-user read-only Surge request metadata snapshot (JSON)
+      sudo audit-install [--megabytes 256|1024|4096] [--timezone AREA/CITY]
+                                      Install/start independent bounded PKTAP recorder; no PF changes
+      sudo audit-start / audit-stop    Start/stop recording; boot re-arms an installed recorder
+      sudo audit-preview               Limited metadata preview of retained captures
+      sudo audit-coverage              Scan actual retained packet timestamps (JSON; may be partial)
+      sudo audit-uninstall             Stop recorder/remove its service; retain private captures
       validate FILE                   Validate a policy without network changes
       rules                           Preview blocked PF rules
       swiftbar [--section]             Render the portable SwiftBar menu
@@ -87,6 +95,16 @@ enum CLI {
             try Probe.dropPrivileges(to: uid)
             let observation = try Probe.session(configuration: Configuration.load())
             print(try JSON.encode(observation))
+            return
+        }
+        if action == "audit-request-probe" {
+            guard args.count == 2, let uid = UInt32(args[1]) else { throw GuardError("Invalid internal request audit") }
+            try Probe.dropPrivileges(to: uid)
+            print(try JSON.encode(SurgeRequestAuditBatch.collect()))
+            return
+        }
+        if action.hasPrefix("audit-") {
+            try PacketAuditAdmin.command(args)
             return
         }
         if ["check", "doctor"].contains(action) {

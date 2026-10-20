@@ -6,8 +6,8 @@ label=io.github.surge-guard
 action=${1:---help}
 if [ "$#" -gt 1 ]; then printf '%s\n' 'Expected one action.' >&2; exit 2; fi
 case "$action" in
-    --help) printf '%s\n' 'Actions: restart, start, unlock, backup, rollback, restore-policy, logs, follow-logs, doctor, open-surge'; exit 0 ;;
-    restart|start|unlock|backup|rollback|restore-policy|logs|follow-logs|doctor|open-surge) ;;
+    --help) printf '%s\n' 'Actions: restart, start, unlock, backup, rollback, restore-policy, logs, follow-logs, audit-logs, audit-requests, doctor, open-surge'; exit 0 ;;
+    restart|start|unlock|backup|rollback|restore-policy|logs|follow-logs|audit-logs|audit-requests|doctor|open-surge) ;;
     *) printf '%s\n' 'Unknown recovery action.' >&2; exit 2 ;;
 esac
 if [ "$(id -u)" -eq 0 ]; then printf '%s\n' 'Run this menu action as your normal user.' >&2; exit 1; fi
@@ -49,7 +49,7 @@ wait_exit() {
 
 modern=0
 case "$action" in
-    unlock|logs|follow-logs) ;; # Independent actions must never invoke a broken/hung guard binary.
+    unlock|logs|follow-logs|audit-logs|audit-requests) ;; # Independent actions must never invoke a broken/hung guard binary.
     *)
         help_text=$("$guard_bin" --help 2>/dev/null || true)
         case "$help_text" in *restore-policy*) modern=1 ;; esac
@@ -69,13 +69,16 @@ case "$action" in
     restore-policy) printf '%s\n' 'Restores the policy saved before the last change. Its allowed routes may differ.' ;;
 esac
 sudo -v
-if [ "$action" = logs ] || [ "$action" = follow-logs ]; then
+if [ "$action" = logs ] || [ "$action" = follow-logs ] || [ "$action" = audit-logs ] || [ "$action" = audit-requests ]; then
     renderer="$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-ui"
     if [ ! -x "$renderer" ]; then printf '%s\n' 'Reinstall the user menu renderer to format logs.' >&2; exit 1; fi
     tail_args=(-n 200)
     if [ "$action" = follow-logs ]; then tail_args+=(-F); fi
+    log_path=/private/var/db/surge-guard/events.log
+    if [ "$action" = audit-logs ]; then log_path=/private/var/db/surge-guard/packet-audit/events.log; fi
+    if [ "$action" = audit-requests ]; then log_path=/private/var/db/surge-guard/packet-audit/requests.log; fi
     # Only the fixed tail command is privileged; the formatter stays unprivileged.
-    sudo /usr/bin/tail "${tail_args[@]}" /private/var/db/surge-guard/events.log | "$renderer" format-logs
+    sudo /usr/bin/tail "${tail_args[@]}" "$log_path" | "$renderer" format-logs
     exit 0
 fi
 if [ "$action" = unlock ]; then
