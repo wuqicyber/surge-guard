@@ -1,0 +1,37 @@
+Sources/SurgeGuardCore/EgressObservation.swift
+  s_feb680f5d77ef5::t_e3b53650242f24 18-25,30-37,47,56-59,189-190,193,195-200,203-205
+Sources/SurgeGuardCore/Firewall.swift
+  s_feb680f5d77ef5::t_a1c7964bd2d7b7 85-120,125-132,213,225-237,243,249-286
+Tests/SurgeGuardTests/main.swift
+  s_feb680f5d77ef5::t_12f5dee7df67c0 109-168
+README.md
+  s_feb680f5d77ef5::t_1d1541e63a5521 380-400
+README.zh-CN.md
+  s_feb680f5d77ef5::t_9414d7f120d130 19-21,26-31
+Sources/SurgeGuard/main.swift
+  s_feb680f5d77ef5::t_46dd1704408022 197,233-242,270,285-288,302,308-316,322-325,327-328,330,340-342
+Sources/SurgeGuardCore/LogReader.swift
+  s_feb680f5d77ef5::t_5932f143a160d1 81-82,133,136-145,152-157,159,171-197,205-208
+docs/acceptance.md
+  s_feb680f5d77ef5::t_ce2087a8fd92e5 107-119
+docs/troubleshooting.md
+  s_feb680f5d77ef5::t_89a1603ec69113 109-139
+docs/verification.md
+  s_feb680f5d77ef5::t_e50503b9e9c2e0 401-443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "1fcd18f864478c069f488d827686e118557f4602",
+  "prompts": {},
+  "sessions": {
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
