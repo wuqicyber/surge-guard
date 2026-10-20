@@ -106,6 +106,37 @@ field measures callback receipt to PF verification; command/scheduling latency
 and the 0.5-second fallback rule out a guaranteed tens-of-milliseconds deadline.
 Keep endpoint/process evidence private when sharing reports.
 
+New records split public sending candidates, public receive-only observations,
+system extensions, local/reserved peers and unresolved peers. Only the first is
+a warning; it remains unverified. A receive-to-send or PF-revision change bypasses
+five-minute dedup. Summary counts describe that sample, not the whole five-minute
+interval. `limited_flows` reports records omitted by the per-sample cap. Start/end
+state and PF revision cover a conservative tracking window including task dispatch
+and callback; a change anywhere in it prevents attribution to one guard state.
+Manual/old samples do not invent a verified historical state.
+
+`pf_block_traffic` is separate evidence: read-only `pfctl -a io.github.surge-guard
+-s labels` counters for `surge-guard-block`, at most every five seconds while
+blocked and when preparing to allow. Inspect `block_id`, `totals`, `delta`,
+in/out counts, `counter_sampled_uptime` and `delta_baseline_uptime`. These are
+matched block packets, without per-packet endpoints or processes. They cannot
+be joined to a socket record to claim that specific flow was dropped. Zero
+matches does not prove no bypass. The final read precedes actual clearing, so
+the last small tail is not counted. Read/parse errors or counter decreases use
+`pf_block_observation_failed`, never fabricated zeroes; baseline loss is explicit.
+`pf_block_observation_gap` marks a reload without a final old-counter read:
+blocking takes priority over logging. Neither failure changes firewall policy.
+
+For full retained history, inspect both private files. macOS unified-log mirrors
+can truncate long JSON records; a truncated mirror is not the full source:
+
+```sh
+sudo /bin/cat /private/var/db/surge-guard/events.log.1 /private/var/db/surge-guard/events.log \
+  | "$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-ui" format-logs
+```
+
+The predecessor may not exist before the first rotation. Do not publish raw output.
+
 Share a small sanitized summary: component version, macOS/Surge versions,
 configuration mode, state, reason/event codes and which acceptance scenario
 failed. Remove personal URLs, group/node names, app lists, paths and raw logs.

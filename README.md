@@ -377,8 +377,27 @@ or path. System-extension identity does not approve an independent network.
 Classification never changes PF; no product, interface number or user-specific
 exception is hardcoded.
 
-The same connection is deduplicated for five minutes, with at most 20 new evidence
-records per sample and a five-minute summary. Existing private 1 MiB rotation
+The same evidence is deduplicated for five minutes, with at most 20 new evidence
+records per sample and a five-minute summary. A receive-to-send change or PF
+revision change is recorded again. Public sending candidates take priority over
+receive-only/local/unknown records; omitted and deduplicated counts are explicit.
+Events include the sample command's wall/monotonic interval and the daemon's
+state at both ends of a conservative tracking interval (including task dispatch
+and callback time). A PF revision change marks it mixed, even if the
+start and end states match. This association does not classify individual bytes
+as passed or blocked. Manual/historical samples without this tracking say unknown.
+
+While blocked, the daemon reads only its own PF label counters at most every
+five seconds and once when preparing to allow. `pf_block_traffic` records new and
+current cumulative matched packets/bytes, separated into inbound and outbound,
+with a unique block ID and monotonic counter boundaries. These are rule matches,
+not per-process/endpoint packet records. The last read precedes rule clearing;
+hits after that read are not included. Reloads and read/parse failures produce
+explicit gap/failure events instead of zero counts. Observation failure does not
+change firewall decisions. No PF logging flags or packet capture are enabled.
+The opening checks are refreshed after the optional counter read.
+
+Existing private 1 MiB rotation
 still applies. Missing counters/interfaces and unresolved UDP targets are exposed
 as coverage gaps. Command/parsing failures generate an observation-unavailable
 event and recovery is recorded; observation failure never changes network policy.

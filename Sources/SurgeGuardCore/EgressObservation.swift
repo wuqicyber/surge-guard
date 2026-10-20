@@ -15,10 +15,26 @@ public struct EgressFlow: Codable, Equatable {
     public var receivedBytes: UInt64
 
     public var key: String { "\(pid)|\(interface)|\(transport)|\(localEndpoint)|\(remoteEndpoint)" }
+
+    public var category: String { Self.category(kind: processKind, scope: destinationScope, sent: sentBytes) }
+    public static let categories = ["public_send_review", "public_receive_only", "system_extension", "local_or_reserved", "unresolved_peer"]
+    public static func category(kind: String, scope: String, sent: UInt64) -> String {
+        if kind == "system_extension" { return "system_extension" }
+        if scope == "public" { return sent > 0 ? "public_send_review" : "public_receive_only" }
+        return scope == "local_or_reserved" ? "local_or_reserved" : "unresolved_peer"
+    }
 }
 
 public struct EgressObservation: Codable {
     public var sampledAt = Date()
+    public var sampleStartedAt: Date?
+    public var sampleStartedUptime: Double?
+    public var sampleCompletedUptime: Double?
+    public var guardStateAtStart: String?
+    public var guardStateAtEnd: String?
+    public var guardStateDuringSample: String?
+    public var guardTrackingStartedUptime: Double?
+    public var guardTrackingCompletedUptime: Double?
     public var scope = "sampled_tcp_udp_interface_activity"
     public var sampleSeconds = 1
     public var surgeInterface: String?
@@ -28,6 +44,7 @@ public struct EgressObservation: Codable {
     public var flows: [EgressFlow] = []
 
     public static func collect() throws -> EgressObservation {
+        let startedAt = Date(), startedUptime = SystemClock.seconds
         let surgeInterface = Probe.addresses().first { $0.up && $0.address == "198.18.0.1" }?.name
         // The first nettop frame is lifetime totals. Only the second delta frame is evidence of new activity.
         let output = try Command.checked("/usr/bin/nettop", ["-n", "-x", "-d", "-L", "2", "-s", "1",
@@ -36,6 +53,10 @@ public struct EgressObservation: Codable {
             throw GuardError("Surge interface changed during egress sampling; retry on the next sample")
         }
         var observation = try parse(output, surgeInterface: surgeInterface, surgePID: Probe.trustedSurgePID())
+        observation.sampleStartedAt = startedAt
+        observation.sampleStartedUptime = startedUptime
+        observation.sampleCompletedUptime = SystemClock.seconds
+        observation.guardStateDuringSample = "unknown"
         for index in observation.flows.indices {
             var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
             if proc_pidpath(observation.flows[index].pid, &path, UInt32(path.count)) > 0 {
@@ -165,14 +186,23 @@ public struct EgressObservation: Codable {
 
 public struct EgressHistory {
     private var recorded: [String: Double] = [:]
+    public private(set) var deduplicated = 0
+    public private(set) var limited = 0
     public init() {}
 
-    public mutating func newActivity(_ flows: [EgressFlow], now: Double) -> [EgressFlow] {
+    public mutating func newActivity(_ flows: [EgressFlow], now: Double, context: String = "unknown") -> [EgressFlow] {
         recorded = recorded.filter { now >= $0.value && now - $0.value < 300 }
-        let fresh = flows.filter { recorded[$0.key] == nil }
+        func key(_ flow: EgressFlow) -> String {
+            context + "|" + flow.category + "|" + (flow.sentBytes > 0 ? "send|" : "receive|") + flow.key
+        }
+        let fresh = flows.filter { recorded[key($0)] == nil }.sorted {
+            EgressFlow.categories.firstIndex(of: $0.category)! < EgressFlow.categories.firstIndex(of: $1.category)!
+        }
         // Bound both retained keys and per-sample log size under connection churn.
         let selected = Array(fresh.prefix(20))
-        for flow in selected where recorded.count < 4096 { recorded[flow.key] = now }
+        deduplicated = flows.count - fresh.count
+        limited = fresh.count - selected.count
+        for flow in selected where recorded.count < 4096 { recorded[key(flow)] = now }
         return selected
     }
 }

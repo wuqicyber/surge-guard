@@ -104,6 +104,19 @@ generate a bypass or bind a physical interface on an unsaved production session
 merely to pass this test. Packet captures and process-exit timing acceptance
 remain separate from parser/unit tests and a successful background sample.
 
+For the updated logs, check that receive-to-send activity and a PF revision change
+are not hidden by dedup. A start/end state match with an intervening revision
+change must still be a mixed tracking window. Verify caps and coverage gaps remain
+visible; manual samples must not claim continuous firewall-state tracking.
+
+During a separately authorized block scenario, compare `pf_block_traffic` with
+read-only `sudo pfctl -a io.github.surge-guard -s labels`. Match the own rule label,
+in/out packet and byte totals and block ID. Confirm a final pre-allow read and
+subsequent gate transition are distinct. Do not treat a counter as a per-process
+packet trace. A missing label, malformed output or decreasing count must produce
+an evidence gap/failure, not a zero-hit claim or an allow/block policy change.
+Unit fixtures cannot establish live counter accuracy or complete packet coverage.
+
 ## PF coexistence
 
 Capture root `pfctl -sr`, relevant nested anchors and PF references before installation. Confirm the guard attaches first, normal updates change only its anchor, and unlock releases only its own reference. Verify Internet Sharing, VM networking and other PF users if they are part of your setup. The initial main-ruleset reload deserves separate review.
