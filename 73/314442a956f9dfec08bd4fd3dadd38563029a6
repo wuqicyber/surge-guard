@@ -1,0 +1,37 @@
+Sources/SurgeGuard/PacketAuditAdmin.swift
+  s_feb680f5d77ef5::t_f776aaffb8e258 150-151
+Sources/SurgeGuard/PacketAuditService.swift
+  s_73dd729a430e32::t_62807a4464daa1 90-94
+Sources/SurgeGuardCore/LogReader.swift
+  s_feb680f5d77ef5::t_73dbd7efa811f0 87
+Sources/SurgeGuardCore/PacketAudit.swift
+  s_73dd729a430e32::t_44425248b57f8d 55,138-141,200-204
+Tests/SurgeGuardTests/main.swift
+  s_feb680f5d77ef5::t_b71ba8e82f8d19 38-39,46-51
+docs/packet-audit.md
+  s_73dd729a430e32::t_229c2f35e8d6d9 75-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "73314442a956f9dfec08bd4fd3dadd38563029a6",
+  "prompts": {},
+  "sessions": {
+    "s_73dd729a430e32": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15806-fb61-7d91-acc6-e918dccc9a21",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
