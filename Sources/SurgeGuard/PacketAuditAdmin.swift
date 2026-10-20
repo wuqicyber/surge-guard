@@ -147,6 +147,8 @@ enum PacketAuditAdmin {
         let deadline = SystemClock.seconds + 20
         while SystemClock.seconds < deadline {
             if let status = PacketAuditSnapshot.read(), status.captureReadyAt != nil, status.counters != nil,
+               let measured = status.countersUptime, measured <= SystemClock.seconds, SystemClock.seconds - measured < 10,
+               status.state == "capturing" || status.reason == "capture_drops_reported",
                previousRun == nil || status.runId != previousRun {
                 print("Packet capture opened: \(status.state). Packet attribution and no-bypass completeness remain unverified.")
                 return

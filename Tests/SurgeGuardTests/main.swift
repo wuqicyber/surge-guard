@@ -35,12 +35,20 @@ do {
     let completedStats = packetStats.consume("3 packets dropped by kernel")
     try check(completedStats?.captured == 20 && completedStats?.receivedByFilter == 25 && completedStats?.droppedByKernel == 3,
               "Packet statistics lost capture drops")
+    var resetStats = completedStats!; resetStats.receivedByFilter = 0
+    try check(completedStats!.follows(completedStats!) && !resetStats.follows(completedStats!), "Counter reset or wrap was silently treated as continuous statistics")
     try check(packetStats.consume("4 packets dropped by kernel") == nil, "Statistics reused an old capture baseline")
     var auditState = PacketAuditSnapshot(capacityMegabytes: 256)
     auditState.bootId = "boot-a"; auditState.checkedUptime = 10
     try check(auditState.fresh(boot: "boot-a", now: 11) && !auditState.fresh(boot: "boot-b", now: 11) &&
               !auditState.fresh(boot: "boot-a", now: 18) && !auditState.fresh(boot: "boot-a", now: 9) && !auditState.noBypassVerified,
               "Audit freshness or packet-path confidence was overstated")
+    auditState.state = "capturing"
+    try check(!auditState.fresh(boot: "boot-a", now: 11), "Recorder claimed healthy capture without packet statistics")
+    auditState.capturePid = 400; auditState.counters = completedStats; auditState.countersUptime = 10
+    try check(auditState.fresh(boot: "boot-a", now: 11), "Fresh capture statistics were rejected")
+    auditState.countersUptime = 0
+    try check(!auditState.fresh(boot: "boot-a", now: 11), "Fresh status publication concealed stale capture statistics")
     let childGroup = try Command.checked(CommandLine.arguments[0], ["--packet-audit-group-check"]).trimmingCharacters(in: .whitespacesAndNewlines)
     try check(childGroup == String(getpgrp()), "Capture child did not rejoin supervisor group for launchd cleanup")
     print("PASS: packet recorder arguments, partial/drop statistics, boot freshness and child process-group cleanup")

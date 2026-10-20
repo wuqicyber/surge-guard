@@ -84,6 +84,7 @@ public enum LogReader {
                       "audit_capture_failed": "包级记录失败", "audit_capture_stopped": "包级记录已停止",
                       "audit_capture_gap": "包级记录会话之间有缺口", "audit_capture_drops": "包级记录发生丢包",
                       "audit_stop_requested": "已请求停止包级记录",
+                      "audit_capture_statistics_reset": "抓包统计回退或回绕，继续保留数据包",
                       "audit_state_changed": "包级记录状态变化", "audit_capture_diagnostic": "抓包工具诊断",
                       "audit_guard_state": "采集时观察到门禁状态变化", "audit_surge_request": "Surge 请求元数据",
                       "audit_surge_unavailable": "Surge 请求记录暂不可用", "audit_surge_recovered": "Surge 请求记录已恢复",

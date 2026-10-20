@@ -87,9 +87,11 @@ final class PacketAuditService {
         }
         if let counters = statistics.consume(line) {
             let previous = snapshot.counters
-            if let previous, counters.captured < previous.captured || counters.receivedByFilter < previous.receivedByFilter ||
-                counters.droppedByKernel < previous.droppedByKernel {
-                throw GuardError("Capture counters decreased; audit continuity lost")
+            if let previous, !counters.follows(previous) {
+                snapshot.captureHistoryHasGaps = true
+                try event("audit_capture_statistics_reset", "Capture counters decreased or wrapped; prior statistical continuity is unverified, packet recording continues",
+                          ["previous_counters": try JSONSerialization.jsonObject(with: Data(JSON.encode(previous).utf8)),
+                           "current_counters": try JSONSerialization.jsonObject(with: Data(JSON.encode(counters).utf8))])
             }
             snapshot.counters = counters
             snapshot.countersUptime = SystemClock.seconds

@@ -52,7 +52,7 @@ public enum PacketAudit {
     public static func event(_ event: String, message: String, details: [String: Any] = [:], timeZone: String) throws {
         let timestamp = ISO8601DateFormatter()
         timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let warning = ["audit_capture_failed", "audit_capture_gap", "audit_capture_drops", "audit_surge_unavailable", "audit_surge_history_gap"].contains(event) ||
+        let warning = ["audit_capture_failed", "audit_capture_gap", "audit_capture_drops", "audit_capture_statistics_reset", "audit_surge_unavailable", "audit_surge_history_gap"].contains(event) ||
             details["state"] as? String == "incomplete"
         let record: [String: Any] = ["time": timestamp.string(from: Date()), "display_time_zone": timeZone,
                                      "component": "PacketAudit", "event": event, "level": warning ? "warning" : "info",
@@ -135,6 +135,10 @@ public struct PacketCaptureCounters: Codable, Equatable {
     public var captured: UInt64
     public var receivedByFilter: UInt64
     public var droppedByKernel: UInt64
+
+    public func follows(_ previous: Self) -> Bool {
+        captured >= previous.captured && receivedByFilter >= previous.receivedByFilter && droppedByKernel >= previous.droppedByKernel
+    }
 }
 
 public struct PacketCaptureStatistics {
@@ -193,7 +197,11 @@ public struct PacketAuditSnapshot: Codable {
     public init(capacityMegabytes: Int) { self.capacityMegabytes = capacityMegabytes }
 
     public func fresh(boot: String = SystemClock.bootID, now: Double = SystemClock.seconds) -> Bool {
-        version == 1 && !boot.isEmpty && bootId == boot && checkedUptime <= now && now - checkedUptime < 8
+        guard version == 1, !boot.isEmpty, bootId == boot, checkedUptime <= now, now - checkedUptime < 8 else { return false }
+        if state == "capturing" {
+            guard capturePid != nil, counters != nil, let measured = countersUptime, measured <= now, now - measured < 10 else { return false }
+        }
+        return true
     }
 
     public static func read() -> PacketAuditSnapshot? {

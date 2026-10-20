@@ -72,6 +72,8 @@ capture child only. The PF daemon is independent and is never force-restarted.
 
 Both event streams use the existing current/previous 1 MiB rotation and private
 writer locks. State/request snapshots are atomically replaced, not appended.
+Capture counter reset/wrap records both old and new counts and marks statistical
+continuity unknown while continuing raw recording; it does not force a capture gap.
 Request queries run in the console user's session **after dropping privileges**.
 The root recorder never executes the user-owned Surge CLI as root. A missing user
 session or unavailable Surge is a recorded source gap, not a permission to allow
