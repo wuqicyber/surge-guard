@@ -1,0 +1,61 @@
+AGENTS.md
+  s_feb680f5d77ef5::t_ef9100bef5019f 9,72-78
+Package.swift
+  s_feb680f5d77ef5::t_7da416986edb00 10-11
+README.md
+  s_feb680f5d77ef5::t_692685d8bb949f 36-37,49,439-450
+Sources/CPcap/module.modulemap
+  s_feb680f5d77ef5::t_60e2a88c9bb99b 1-5
+Sources/CPcap/shim.h
+  s_feb680f5d77ef5::t_a0fd5139978c5b 1
+Sources/SurgeGuardCore/PacketAudit.swift
+  s_1aab1634823991::t_d98d35d686bc77 1-208
+Tests/SurgeGuardTests/main.swift
+  s_1aab1634823991::t_458b6717871f7d 6-11,24-138,458-465
+docs/acceptance.md
+  s_feb680f5d77ef5::t_f40ac9fcac0c55 120-143
+integrations/swiftbar/surge-guard-action.sh
+  s_1aab1634823991::t_e629b06c38d339 9-10,52,72,77-79,81
+README.zh-CN.md
+  s_feb680f5d77ef5::t_bc4115aab404f6 43-50
+Sources/SurgeGuard/CLI.swift
+  s_feb680f5d77ef5::t_8cc4cba9f3146f 13-20,100-109
+Sources/SurgeGuard/PacketAuditAdmin.swift
+  s_feb680f5d77ef5::t_237533a7361c94 1-235
+Sources/SurgeGuard/PacketAuditService.swift
+  s_feb680f5d77ef5::t_123ca7cd188043 1-286
+Sources/SurgeGuard/SwiftBar.swift
+  s_feb680f5d77ef5::t_f4a28a63208d45 47,49-50,59-82
+Sources/SurgeGuardCore/LogReader.swift
+  s_feb680f5d77ef5::t_2c63d5fddb6d1a 83-90,103,141-165
+Sources/SurgeGuardCore/SurgeRequestAudit.swift
+  s_feb680f5d77ef5::t_2074d8db804541 1-95
+docs/packet-audit.md
+  s_feb680f5d77ef5::t_32f4d6f6780775 1-122
+docs/verification.md
+  s_feb680f5d77ef5::t_78f1631c42f8fb 444-480
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "16166d8a0706275e69a1c95f384d0b455821312d",
+  "prompts": {},
+  "sessions": {
+    "s_1aab1634823991": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50870fb2-78c2-4dff-b971-715aef6f3a0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_feb680f5d77ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a153c6-95d5-7103-b879-c4e87cf6c413",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
