@@ -441,3 +441,40 @@ Live PF counter agreement, background transition association, blocking latency,
 restart/rollback/power scenarios and packet-by-packet coverage remain unverified.
 Counters omit any matches after the last read and before rule clearing; they do
 not identify individual processes/endpoints and cannot establish strict zero bypass.
+
+## Optional continuous packet recorder — 2026-10-20
+
+- Added a separate opt-in packet collector and management commands. It uses fixed
+  system PKTAP/tcpdump arguments covering all interfaces, a default 256 MB rolling
+  ring, 256-byte packet prefixes and available native process/interface/direction
+  metadata. Captures may include payload prefixes; all evidence stays private.
+  It does not restart the guard or change its PF policy. It is not enabled by
+  updating the existing guard or user renderer.
+- Added filtered Surge request metadata alongside capture evidence. A root-owned
+  helper enters the console session and drops privileges before querying the
+  fixed Surge CLI. A real normal-user read-only sample parsed active/recent rows
+  successfully and excluded URL/query/header/body fields. No external test request
+  was made. Root bootstrap/drop-privilege execution remains untested in this phase.
+- Added source failure/recovery, missing request-window overlap, changed Surge
+  process, capture loss, stop/start and status transitions. Gap flags persist in
+  the session. Recorder health never sets `no_bypass_verified`; there is no packet
+  matcher that turns missing request metadata into a bypass verdict. Capture
+  statistics, filtered metadata and bounded event streams are distinct evidence.
+- All 38 standalone groups, warnings-as-errors release builds, examples and shell
+  checks pass. New cases cover fixed all-interface/bounded capture arguments,
+  partial statistics/drop counters, boot freshness, actual child process-group
+  rejoining, native offline tcpdump ring naming/overshoot, libpcap pcap/pcap-ng
+  timestamp ranges, truncated/unsafe files, metadata exclusion, request dedup and
+  rolling/session gaps, configured log time zones and unprivileged audit bridges.
+- A local normal-user capture attempt returned permission denied. No live packet
+  collection, root audit service install/start/stop, rollback, crash cleanup,
+  packet attribution, packet-drop injection, root IPC-session probe, guard restart,
+  network rule change or intentional bypass was performed. These remain live
+  acceptance work, not inferred passes. Prior read-only guard status remains
+  verified allowed; the existing daemon was not replaced.
+
+The recorder requires local administrator installation before recording starts.
+Its packet/request buffers and retained files can have gaps or be overwritten;
+finite captures and zero reported drops cannot establish complete historical
+coverage, packet attribution or strict zero bypass. Power/sleep/early-boot and
+high-load scenarios remain unverified.

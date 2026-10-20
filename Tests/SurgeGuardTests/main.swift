@@ -3,6 +3,12 @@ import SurgeGuardCore
 import Darwin
 import SystemConfiguration
 
+if Array(CommandLine.arguments.dropFirst()) == ["--packet-audit-group-check"] {
+    try PacketAudit.joinParentProcessGroup()
+    print(getpgrp())
+    exit(0)
+}
+
 // Standalone checks also work with Command Line Tools, where XCTest may not
 // be installed. Throw on failure so checks still work in optimized builds.
 func check(_ value: @autoclosure () throws -> Bool, _ message: String) throws {
@@ -15,6 +21,129 @@ func rejects(_ operation: () throws -> Void) throws {
 }
 
 do {
+    let auditArguments = try PacketAudit.arguments(megabytes: 256)
+    try check(auditArguments.contains("pktap,all") && auditArguments.contains("-W") && auditArguments.contains("8") &&
+              auditArguments[auditArguments.firstIndex(of: "-C")! + 1] == "32" && !auditArguments.contains("-I"),
+              "Recorder lost all-interface coverage, bounded retention or enabled disruptive Wi-Fi monitor mode")
+    try check(auditArguments[auditArguments.firstIndex(of: "-B")! + 1] == "512", "Capture buffer request exceeded the standard macOS BPF maximum")
+    for capacity in [0, 255, 257, -1, Int.max] { try rejects { _ = try PacketAudit.arguments(megabytes: capacity) } }
+    var auditConfig = PacketAuditConfiguration(); try auditConfig.validate()
+    auditConfig.timeZone = "not/a/zone"; try rejects { try auditConfig.validate() }
+    var packetStats = PacketCaptureStatistics()
+    try check(packetStats.consume("0 packets dropped by kernel") == nil && packetStats.consume("20 packets captured") == nil &&
+              packetStats.consume("25 packets received by filter") == nil, "Partial/misordered statistics became a zero-loss report")
+    let completedStats = packetStats.consume("3 packets dropped by kernel")
+    try check(completedStats?.captured == 20 && completedStats?.receivedByFilter == 25 && completedStats?.droppedByKernel == 3,
+              "Packet statistics lost capture drops")
+    var resetStats = completedStats!; resetStats.receivedByFilter = 0
+    try check(completedStats!.follows(completedStats!) && !resetStats.follows(completedStats!), "Counter reset or wrap was silently treated as continuous statistics")
+    try check(packetStats.consume("4 packets dropped by kernel") == nil, "Statistics reused an old capture baseline")
+    var auditState = PacketAuditSnapshot(capacityMegabytes: 256)
+    auditState.bootId = "boot-a"; auditState.checkedUptime = 10
+    try check(auditState.fresh(boot: "boot-a", now: 11) && !auditState.fresh(boot: "boot-b", now: 11) &&
+              !auditState.fresh(boot: "boot-a", now: 18) && !auditState.fresh(boot: "boot-a", now: 9) && !auditState.noBypassVerified,
+              "Audit freshness or packet-path confidence was overstated")
+    auditState.state = "capturing"
+    try check(!auditState.fresh(boot: "boot-a", now: 11), "Recorder claimed healthy capture without packet statistics")
+    auditState.capturePid = 400; auditState.counters = completedStats; auditState.countersUptime = 10
+    try check(auditState.fresh(boot: "boot-a", now: 11), "Fresh capture statistics were rejected")
+    auditState.countersUptime = 0
+    try check(!auditState.fresh(boot: "boot-a", now: 11), "Fresh status publication concealed stale capture statistics")
+    let childGroup = try Command.checked(CommandLine.arguments[0], ["--packet-audit-group-check"]).trimmingCharacters(in: .whitespacesAndNewlines)
+    try check(childGroup == String(getpgrp()), "Capture child did not rejoin supervisor group for launchd cleanup")
+    print("PASS: packet recorder arguments, partial/drop statistics, boot freshness and child process-group cleanup")
+
+    let captureDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("packet-audit-test-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    do {
+        defer { try? FileManager.default.removeItem(at: captureDirectory) }
+        func le<T: FixedWidthInteger>(_ value: T, _ data: inout Data) {
+            var value = value.littleEndian; withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
+        }
+        var pcap = Data()
+        le(UInt32(0xa1b2c3d4), &pcap); le(UInt16(2), &pcap); le(UInt16(4), &pcap)
+        for value: UInt32 in [0, 0, 262144, 1] { le(value, &pcap) }
+        let frame = Data([UInt8](repeating: 0, count: 65_536))
+        for time: UInt32 in 1...40 {
+            le(time, &pcap); le(UInt32(123456), &pcap); le(UInt32(frame.count), &pcap); le(UInt32(frame.count), &pcap); pcap.append(frame)
+        }
+        let source = captureDirectory.appendingPathComponent("source.pcap").path
+        try AtomicFile.write(String(), to: source, mode: 0o600)
+        try pcap.write(to: URL(fileURLWithPath: source))
+        let range = try PacketCaptureRange.read(source, owner: getuid(), maximumBytes: 4_000_000)
+        try check(range.packets == 40 && abs(range.earliest!.timeIntervalSince1970 - 1.123456) < 0.00001 &&
+                  abs(range.latest!.timeIntervalSince1970 - 40.123456) < 0.00001 && range.readError == nil, "Retained pcap time range was inferred from file modification times")
+        let output = captureDirectory.appendingPathComponent("ring").path
+        _ = try Command.checked("/usr/sbin/tcpdump", ["-r", source, "-C", "1", "-W", "2", "-w", output], timeout: 5)
+        let ringFiles = try FileManager.default.contentsOfDirectory(atPath: captureDirectory.path).filter { $0.hasPrefix("ring") }
+        try check(Set(ringFiles) == ["ring0", "ring1"], "Native tcpdump rotation did not retain a fixed file count or expected filenames")
+        for name in ringFiles {
+            let size = (try FileManager.default.attributesOfItem(atPath: captureDirectory.appendingPathComponent(name).path)[.size] as! NSNumber).intValue
+            try check(size <= 1_000_000 + 65_536 + 64, "Native rotation exceeded one-record overshoot")
+        }
+        var ng = Data()
+        for value: UInt32 in [0x0a0d0d0a, 28, 0x1a2b3c4d] { le(value, &ng) }
+        le(UInt16(1), &ng); le(UInt16(0), &ng); le(UInt64.max, &ng); le(UInt32(28), &ng)
+        le(UInt32(1), &ng); le(UInt32(20), &ng); le(UInt16(1), &ng); le(UInt16(0), &ng); le(UInt32(256), &ng); le(UInt32(20), &ng)
+        for time: UInt32 in [3_000_000, 5_000_000] {
+            for value: UInt32 in [6, 36, 0, 0, time, 4, 4] { le(value, &ng) }
+            ng.append(Data([0, 0, 0, 0])); le(UInt32(36), &ng)
+        }
+        let ngPath = captureDirectory.appendingPathComponent("fixture.pcapng").path
+        try AtomicFile.write("", to: ngPath, mode: 0o600); try ng.write(to: URL(fileURLWithPath: ngPath))
+        let ngRange = try PacketCaptureRange.read(ngPath, owner: getuid(), maximumBytes: 4096)
+        try check(ngRange.packets == 2 && ngRange.earliest?.timeIntervalSince1970 == 3 && ngRange.latest?.timeIntervalSince1970 == 5,
+                  "Native pcap-ng timestamp scan failed")
+        ng.removeLast(2); try ng.write(to: URL(fileURLWithPath: ngPath))
+        let partial = try PacketCaptureRange.read(ngPath, owner: getuid(), maximumBytes: 4096)
+        try check(partial.readError != nil, "Truncated capture was reported as an intact time range")
+        let alias = captureDirectory.appendingPathComponent("alias").path
+        try FileManager.default.createSymbolicLink(atPath: alias, withDestinationPath: source)
+        try rejects { _ = try PacketCaptureRange.read(alias, owner: getuid(), maximumBytes: 4_000_000) }
+        try rejects { _ = try PacketCaptureRange.read(source, owner: getuid(), maximumBytes: 5) }
+        chmod(source, 0o644)
+        try rejects { _ = try PacketCaptureRange.read(source, owner: getuid(), maximumBytes: 4_000_000) }
+        let fifo = captureDirectory.appendingPathComponent("fifo").path
+        try check(mkfifo(fifo, 0o600) == 0, "Could not create unsafe-file fixture")
+        try rejects { _ = try PacketCaptureRange.read(fifo, owner: getuid(), maximumBytes: 4096) }
+    }
+    print("PASS: actual pcap/pcap-ng timestamp ranges, native bounded rotation, truncated captures and unsafe files")
+
+    let auditRow: [String: Any] = ["id": 7, "startDate": 100.0, "pid": 400, "remoteHost": "example.com:443",
+                                  "policyName": "DIRECT", "outBytes": 10, "completed": false,
+                                  "URL": "https://example.com/?secret=do-not-store", "headers": ["Authorization": "do-not-store"], "body": "do-not-store"]
+    func requestBatch(_ row: [String: Any], pid: Int32 = 401) throws -> SurgeRequestAuditBatch {
+        try SurgeRequestAuditBatch.parse(JSONSerialization.data(withJSONObject: ["active-requests": [row], "recent-requests": [row]]), surgePid: pid, started: 10, completed: 11)
+    }
+    let batch = try requestBatch(auditRow)
+    try check(!JSON.encode(batch).contains("do-not-store") && batch.activeRequests[0].policyName == "DIRECT", "Request audit stored URL/header/body secrets or lost Surge DIRECT metadata")
+    var requestHistory = SurgeRequestAuditHistory()
+    try check(requestHistory.changes(batch).count == 1 && requestHistory.changes(batch).isEmpty, "Request audit lost first observation or flooded unchanged snapshots")
+    var byteUpdate = auditRow; byteUpdate["outBytes"] = 30
+    try check(requestHistory.changes(requestBatch(byteUpdate)).isEmpty, "Lifetime byte updates flooded request event history")
+    byteUpdate["completed"] = true
+    try check(requestHistory.changes(requestBatch(byteUpdate)).count == 1, "Request completion evidence was lost")
+    byteUpdate["id"] = 8
+    _ = requestHistory.changes(try requestBatch(byteUpdate))
+    try check(requestHistory.recentWindowOverlap.hasPrefix("missing"), "Non-overlapping request history silently became complete")
+    _ = requestHistory.changes(try requestBatch(byteUpdate, pid: 402))
+    try check(requestHistory.recentWindowOverlap == "surge_process_changed", "Surge replacement lost request audit boundary")
+    try rejects { _ = try SurgeRequestAuditBatch.parse(Data("{}".utf8), surgePid: 401, started: 10, completed: 11) }
+    var invalidRequest = auditRow; invalidRequest["startDate"] = "bad"
+    try rejects { _ = try requestBatch(invalidRequest) }
+    print("PASS: Surge request metadata excludes secrets, distinguishes lifetime counts and exposes rolling/session history gaps")
+    let dropEvent = "{\"event\":\"audit_capture_drops\",\"component\":\"PacketAudit\",\"time\":\"2026-01-01T00:00:00Z\",\"display_time_zone\":\"Asia/Singapore\",\"details\":{\"dropped_by_kernel\":3}}"
+    let dropHuman = LogReader.format(dropEvent)
+    try check(dropHuman.contains("2026-01-01 08:00:00.000 +08:00") && dropHuman.contains("内核抓包丢失：3 包") &&
+              dropHuman.contains("没有记录到绕过不代表确认无绕过"), "Audit log lost configured time zone, capture loss or evidence boundary")
+    let requestEvent: [String: Any] = ["event": "audit_surge_request", "details": ["request": try JSONSerialization.jsonObject(with: Data(JSON.encode(batch.recentRequests[0]).utf8))]]
+    let requestLine = String(decoding: try JSONSerialization.data(withJSONObject: requestEvent), as: UTF8.self)
+    try check(LogReader.format(requestLine).contains("DIRECT 也可能由 Surge 处理") && LogReader.format(requestLine).contains("不是本次增量"),
+              "Surge request counts or DIRECT selection became a bypass claim")
+    try check(LogReader.format(requestLine, json: true).contains("source_port") == false &&
+              LogReader.format(requestLine, json: true).contains("policy_name"), "Audit JSON was rewritten or invented absent evidence")
+    print("PASS: audit logs preserve configured display time zone, loss evidence and Surge request limitations")
+
     let egressHeader = ",interface,state,bytes_in,bytes_out,\n"
     let egressFirst = egressHeader + "Example.400,,,999,999,\ntcp4 192.168.1.2:5000<->1.1.1.1:443,en0,Established,999,999,\n"
     let egressDelta = egressHeader + "\"Example, Browser.400\",,,100,200,\n" +
@@ -334,6 +463,14 @@ do {
         try check(logBridge.status == 0 && logBridge.output.contains("rendered: {") && logCalls.contains("renderer format-logs"), "System log reader bypassed the user formatter")
         try check(logCalls.contains("sudo \(directory)/tail -n 200 /private/var/db/surge-guard/events.log") && !logCalls.contains("sudo \(rendererPath)"), "User formatter was invoked with sudo")
         try check(!logCalls.contains("guard --help"), "Independent log access queried the potentially broken guard executable")
+        for (action, file) in [("audit-logs", "events.log"), ("audit-requests", "requests.log")] {
+            try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+            let auditBridge = try Command.run("/bin/bash", [testScript, action], timeout: 10)
+            let auditCalls = try String(contentsOfFile: directory + "/calls")
+            try check(auditBridge.status == 0 && auditCalls.contains("/private/var/db/surge-guard/packet-audit/" + file) &&
+                      auditCalls.contains("renderer format-logs") && !auditCalls.contains("guard --help") && !auditCalls.contains("sudo \(rendererPath)"),
+                      "Audit log bridge queried guard or ran the user formatter with privileges")
+        }
         try "".write(toFile: directory + "/tail-failed", atomically: true, encoding: .utf8)
         try check(try Command.run("/bin/bash", [testScript, "logs"], timeout: 10).status != 0, "Log pipeline concealed a failed privileged reader")
         let plugin = try String(contentsOf: project.appendingPathComponent("integrations/swiftbar/surge-guard.5s.sh"))

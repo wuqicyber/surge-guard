@@ -44,9 +44,10 @@ enum SwiftBar {
         let renderer = CLI.userDirectory.appendingPathComponent("bin/surge-guard-ui").path
         let normalBinary = FileManager.default.isExecutableFile(atPath: renderer) ? renderer : Paths.binary
         func command(_ title: String, _ args: [String], root: Bool = false, depth: String = "--") {
-            let recoverable = root && args.count == 1 && ["start", "restart", "unlock", "backup", "rollback", "restore-policy", "logs", "follow-logs", "doctor"].contains(args[0]) && FileManager.default.isExecutableFile(atPath: actionHelper)
+            let recoverable = root && args.count == 1 && ["start", "restart", "unlock", "backup", "rollback", "restore-policy", "logs", "follow-logs", "doctor", "audit-logs", "audit-requests"].contains(args[0]) && FileManager.default.isExecutableFile(atPath: actionHelper)
             let executable = recoverable ? actionHelper : root ? "/usr/bin/sudo" : normalBinary
-            let parameters = (root && !recoverable ? [Paths.binary] : []) + args
+            let rootBinary = args.first?.hasPrefix("audit-") == true ? PacketAudit.binary : Paths.binary
+            let parameters = (root && !recoverable ? [rootBinary] : []) + args
             lines.append("\(depth) \(title) | bash=\(parameter(executable)) " + parameters.enumerated().map { "param\($0.offset + 1)=\(parameter($0.element))" }.joined(separator: " ") + " terminal=true refresh=true")
         }
         command("重新检查条件", ["check"])
@@ -55,6 +56,30 @@ enum SwiftBar {
         command("查看最近 200 条日志", ["logs"], root: true)
         if FileManager.default.isExecutableFile(atPath: actionHelper) { command("实时跟踪日志", ["follow-logs"], root: true) }
         else if modern { command("实时跟踪日志", ["logs", "--follow"], root: true) }
+        if FileManager.default.isExecutableFile(atPath: PacketAudit.binary) {
+            let audit = PacketAuditSnapshot.read()
+            let recording = audit?.state == "capturing"
+            let gaps = audit?.captureHistoryHasGaps == true || audit?.surgeHistoryHasGaps == true || audit?.surgeRequestsState != "recording"
+            lines.append("-- 包级审计：\(recording ? (gaps ? "🟠 正在抓包 · 审计有缺口" : "🔵 正在抓包 · 路径未验证") : "🟠 停止、记录有缺口或状态未知")" + parentStyle)
+            if let audit {
+                lines.append("-- 抓包环形容量：\(audit.capacityMegabytes) MB；Surge 请求记录：\(clean(audit.surgeRequestsState)) | color=#595959,#C7C7CC size=12")
+                if audit.surgeHistoryHasGaps || audit.captureHistoryHasGaps {
+                    lines.append("-- 本次会话有采集或请求记录缺口；恢复采集不会清除历史缺口 | color=#92400E,#FCD34D size=12")
+                }
+            }
+            lines.append("-- 抓包运行不代表全部流量经 Surge；未知归属与丢包须核对 | color=#595959,#C7C7CC size=12")
+            command("查看包级审计状态", ["audit-status"])
+            command("查看留存包的实际时间范围", ["audit-coverage"], root: true)
+            command("查看抓包元数据预览（非完整列表）", ["audit-preview"], root: true)
+            if FileManager.default.isExecutableFile(atPath: actionHelper) {
+                command("查看包级审计事件", ["audit-logs"], root: true)
+                command("查看 Surge 请求记录", ["audit-requests"], root: true)
+            }
+            command("开始连续抓包", ["audit-start"], root: true)
+            command("停止连续抓包（重启后恢复）", ["audit-stop"], root: true)
+        } else {
+            lines.append("-- 包级审计：未安装，现有 socket 采样不能证明无绕过 | color=#92400E,#FCD34D size=12")
+        }
         command("编辑规则草稿", ["edit-config"])
         if modern { command("验证并应用规则草稿", ["configure", CLI.draft], root: true) }
         else { lines.append("-- 当前为旧版系统守护：分流门禁及备份命令尚未启用 | color=#92400E,#FCD34D size=12") }

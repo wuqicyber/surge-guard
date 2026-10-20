@@ -80,6 +80,15 @@ public enum LogReader {
                       "egress_observation_summary": "出口观测摘要",
                       "pf_block_traffic": "PF 阻断命中计数", "pf_block_observation_failed": "PF 阻断流量证据暂不可用",
                       "pf_block_observation_gap": "PF 阻断计数记录不完整",
+                      "audit_capture_started": "包级记录开始启动", "audit_capture_ready": "包级采集接口已打开",
+                      "audit_capture_failed": "包级记录失败", "audit_capture_stopped": "包级记录已停止",
+                      "audit_capture_gap": "包级记录会话之间有缺口", "audit_capture_drops": "包级记录发生丢包",
+                      "audit_stop_requested": "已请求停止包级记录",
+                      "audit_capture_statistics_reset": "抓包统计回退或回绕，继续保留数据包",
+                      "audit_state_changed": "包级记录状态变化", "audit_capture_diagnostic": "抓包工具诊断",
+                      "audit_guard_state": "采集时观察到门禁状态变化", "audit_surge_request": "Surge 请求元数据",
+                      "audit_surge_unavailable": "Surge 请求记录暂不可用", "audit_surge_recovered": "Surge 请求记录已恢复",
+                      "audit_surge_history_gap": "Surge 请求历史可能不完整",
                       "application_restore_failed": "应用启动失败，保留待重试", "shutdown_started": "开始有序退出",
                       "shutdown_aborted": "关机已中止，会话已保留", "shutdown_requested": "已请求系统关机",
                       "legacy_migrated": "旧配置已迁移", "migration_app_unresolved": "旧应用名称需要补全 Bundle ID"]
@@ -92,6 +101,7 @@ public enum LogReader {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS XXXXX"
+            if let identifier = record["display_time_zone"] as? String, let zone = TimeZone(identifier: identifier) { formatter.timeZone = zone }
             timestamp = formatter.string(from: date)
         }
         let level = unavailable ? "WARNING" : (record["level"] as? String ?? "info").uppercased()
@@ -129,6 +139,31 @@ public enum LogReader {
                 lines.append("  收到失效事件 / 本次发现失效 → 阻断验证及旧状态清理完成：\(String(format: "%.1f", elapsed)) 毫秒")
             }
             lines.append("  范围：这是守护处理耗时；未测量实际断开至事件收到的时间，也未验证逐包零绕过")
+        } else if event == "audit_surge_request" {
+            let request = details["request"] as? [String: Any] ?? [:]
+            lines.append("  应用：\(text(request["process_path"]))（PID \(text(request["pid"]))）")
+            lines.append("  端点：\(text(request["source_address"])):\(text(request["source_port"])) → \(text(request["remote_host"]))")
+            lines.append("  Surge 策略：\(text(request["original_policy_name"])) → \(text(request["policy_name"]))")
+            lines.append("  状态：完成=\(text(request["completed"]))；失败=\(text(request["failed"]))；拒绝=\(text(request["rejected"]))")
+            lines.append("  观测时累计：发送 \(text(request["out_bytes"])) 字节；接收 \(text(request["in_bytes"])) 字节（不是本次增量）")
+            lines.append("  范围：这是 Surge 自己提供的请求记录；DIRECT 也可能由 Surge 处理，尚未与抓包逐包匹配")
+        } else if event.hasPrefix("audit_") {
+            let descriptions = ["capture_statistics_unavailable": "尚未取得近期抓包统计，无法核对记录状态",
+                "waiting_for_pktap_capture": "正在等待 PKTAP 采集接口就绪",
+                "capture_running; packet_path_attribution_unverified": "采集正在运行，数据包是否经过 Surge 仍待核对",
+                "capture_drops_reported": "抓包计数报告过丢失，对应区间记录不完整",
+                "capture_stopped; subsequent_traffic_not_recorded": "采集已停止，后续流量未记录",
+                "capture_exited_or_failed": "采集进程退出或发生故障，后续记录不可确认",
+                "missing; possible_request_history_gap": "Surge 两次最近请求列表没有重叠，期间可能有未保存的短请求",
+                "surge_process_changed": "Surge 进程已变化，新旧请求历史之间的连续性不可确认",
+                "PKTAP capture opened; attribution and end-to-end completeness remain unverified": "PKTAP 采集接口已打开；流量归属和整体记录完整性仍待核对",
+                "Surge request queries recovered; prior gaps remain unverified": "Surge 请求查询已恢复；之前的缺口仍未补齐"]
+            if !message.isEmpty { lines.append("  说明：\(descriptions[message] ?? String(text(message).prefix(480)))") }
+            if let state = details["state"] { lines.append("  采集状态：\(text(state))") }
+            if let packets = details["dropped_by_kernel"] { lines.append("  内核抓包丢失：\(text(packets)) 包；对应区间不能认定为完整") }
+            if let packets = details["dropped_by_interface"] { lines.append("  接口报告丢失：\(text(packets)) 包；对应区间不能认定为完整") }
+            if let state = details["guard_state"] { lines.append("  当时读取的门禁状态：\(text(state))（不是逐包判定）") }
+            lines.append("  范围：没有记录到绕过不代表确认无绕过；停机、丢包、请求窗口滚动和旧文件覆盖均会限制追溯")
         } else if event == "egress_path_observed" {
             lines.append("  观测：nettop 报告以下 socket 的字节计数增加；接口字段是工具报告值，计数不作为链路总流量合计")
             lines.append("  结论：未验证数据包实际路径，不能据此确认绕过或确认全部经 Surge")

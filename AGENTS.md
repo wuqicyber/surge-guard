@@ -6,6 +6,7 @@ Read README.md first. It is the operational contract for all three components.
 
 - `Sources/SurgeGuardCore`: configuration validation, native readiness probes,
   bounded system commands, PF rules, status freshness and event logging.
+- `Sources/CPcap`: SDK bridge to macOS system libpcap; no downloaded dependency.
 - `Sources/SurgeGuard`: privileged daemon, CLI and SwiftBar menu renderer.
 - `Sources/SurgeGate`: unprivileged application startup/session/shutdown service.
 - `integrations/swiftbar`: thin plugin invoking the installed renderer.
@@ -68,6 +69,13 @@ Read README.md first. It is the operational contract for all three components.
   describe these counters as confirmed public direct traffic or proof of bypass.
   No observations is not a no-bypass claim; keep the sampler asynchronous and
   bounded, and retain JSON evidence/deduplication and failure/recovery events.
+- The optional packet recorder is independent of PF permission. Keep its fixed
+  all-interface capture, private bounded ring, persistent gap flags and fresh
+  job/boot-bound status. Root must drop privileges before Surge request queries.
+  Rejoin the supervisor process group before exec so launchd reaps the capture
+  child after crashes. Never equate a running collector, zero reported drops,
+  request-window overlap or absent request match with verified no-bypass coverage.
+  Raw packet prefixes may contain payload; keep captures/request metadata private.
 
 ## Validation and delivery
 

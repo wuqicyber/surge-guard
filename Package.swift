@@ -7,7 +7,8 @@ let package = Package(
     products: [.executable(name: "surge-guard", targets: ["SurgeGuard"]),
                .executable(name: "surge-gate", targets: ["SurgeGate"])],
     targets: [
-        .target(name: "SurgeGuardCore"),
+        .systemLibrary(name: "CPcap"),
+        .target(name: "SurgeGuardCore", dependencies: ["CPcap"]),
         .executableTarget(name: "SurgeGuard", dependencies: ["SurgeGuardCore"]),
         .executableTarget(name: "SurgeGate", dependencies: ["SurgeGuardCore"]),
         .executableTarget(name: "surge-guard-tests", dependencies: ["SurgeGuardCore"], path: "Tests/SurgeGuardTests")

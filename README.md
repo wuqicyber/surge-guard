@@ -33,7 +33,8 @@ Start here when inspecting or deploying on another Mac:
 5. Use `doctor` and retained logs for failures. Record live tests separately from
    syntax/unit checks. Do not silently unlock networking to make a test pass.
 
-No Trellis setup, Python runtime, package manager or third-party library is needed.
+No Trellis setup, Python runtime or package manager is needed. Packet-file reads
+use the system libpcap already shipped with macOS.
 
 ## Requirements and source map
 
@@ -45,6 +46,7 @@ is not supported. SwiftBar is optional.
 | Location | Responsibility |
 | --- | --- |
 | `Sources/SurgeGuardCore` | Configuration, signature/extension/VIF/route probes, bounded commands, PF, status and logs |
+| `Sources/CPcap` | SDK bridge to system libpcap for offline packet timestamp reads |
 | `Sources/SurgeGuard` | System daemon, management CLI and menu renderer |
 | `Sources/SurgeGate` | Native user-session companion; no Python or app wrapper |
 | `integrations/swiftbar` | Thin portable plugin |
@@ -433,6 +435,18 @@ no-fallback enforcement requires verified tunnel/system filtering support;
 the documented Surge `include-all-networks` profile option is under
 [iOS-only parameters](https://manual.nssurge.com/profile/general.html), not a
 validated macOS solution. Do not set it on a Mac and claim this requirement passed.
+
+## Optional continuous packet recorder
+
+For short-lived traffic that a periodic socket sample cannot cover, an optional
+independent recorder captures all PKTAP interfaces to a bounded private pcap-ng
+ring and retains filtered Surge request metadata. It has separate start/stop,
+health, history-gap, actual retained-time-range and SwiftBar actions. It does not
+restart the guard or change PF. System `libpcap` handles offline timestamp reads.
+Raw prefixes can contain payload; the default 256 MB ring overwrites old history.
+Missing attribution and capture/request gaps stay unverified, and collector
+health is never a no-bypass claim. It is off until explicitly installed.
+Read the [packet-audit contract and commands](docs/packet-audit.md) before enabling.
 
 ## Managed files and removal
 
