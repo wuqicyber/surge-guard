@@ -1,0 +1,57 @@
+Sources/SurgeGuard/Recovery.swift
+  s_73dd729a430e32::t_72b3377d96fb6c 8-9,23,78-85
+Sources/SurgeGuard/main.swift
+  s_73dd729a430e32::t_22d19f295c7d3e 10,21-23,54-58,62-64,68,73,169-170,183,213-217,232-248,270-279,283-286,294-295
+examples/persistent-tcp.json
+  s_73dd729a430e32::t_ccadea0e8b58c7 1-6
+scripts/check.sh
+  s_73dd729a430e32::t_8ec0bc6bbb976f 7-14,17
+scripts/install-user.sh
+  s_73dd729a430e32::t_8479bd82fd2bc5 26,29-30,45
+Package.swift
+  s_73dd729a430e32::t_3fa8c6b0a0a016 8-9,15
+Sources/SurgeGuard/PacketAuditAdmin.swift
+  s_73dd729a430e32::t_803953ce4043f2 42-45,149
+Sources/SurgeGuardCore/Configuration.swift
+  s_73dd729a430e32::t_51d0853abaa2ba 26-32,36,40,76-78
+Sources/SurgeGuardCore/DedicatedEgress.swift
+  s_73dd729a430e32::t_5e37be80b3c34e 1-40
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_73dd729a430e32::t_ba55e1b6de79ca 36-37,49
+Sources/SurgeGuardCore/Firewall.swift
+  s_73dd729a430e32::t_e3b86082034747 240,242-248,251-257
+Sources/SurgeGuardCore/PacketAudit.swift
+  s_73dd729a430e32::t_eceec0704cb098 150-163,213-217
+Sources/SurgeGuardCore/Policy.swift
+  s_73dd729a430e32::t_9ede38b36a3457 69-83
+Sources/SurgeGuardCore/Recovery.swift
+  s_73dd729a430e32::t_9497b14771d9e0 10-12,16-18
+Sources/SurgeGuardCore/SurgeProcess.swift
+  s_73dd729a430e32::t_31327596a26d69 1-30
+Sources/SurgeGuardCore/System.swift
+  s_73dd729a430e32::t_4868cc41529d3c 181-215,219-223,230-240
+Sources/SurgeLaunch/main.c
+  s_73dd729a430e32::t_6efa8f9c01f73c 1-59
+docs/acceptance.md
+  s_73dd729a430e32::t_41bf7a5a40ebff 144-175,183-223
+docs/packet-audit.md
+  s_73dd729a430e32::t_39b0a1cc15af1b 52-56,119-123,130-158
+docs/verification.md
+  s_73dd729a430e32::t_e808e3511615f1 481-1090
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "f855dbed866ef345144665f07e8c1f8ec51e8704",
+  "prompts": {},
+  "sessions": {
+    "s_73dd729a430e32": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15806-fb61-7d91-acc6-e918dccc9a21",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
