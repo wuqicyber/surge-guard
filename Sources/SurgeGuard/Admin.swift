@@ -85,16 +85,7 @@ enum Admin {
         }
         let backup = FileManager.default.fileExists(atPath: Paths.binary) ? try Recovery.save(kind: "update") : nil
         if let backup { try Recovery.validate(backup) }
-        let config = FileManager.default.fileExists(atPath: Paths.configuration) ? try Configuration.load() : .enhanced
-        var expectAllowed = try Probe.readiness().ready
-        if expectAllowed, config.mode == "routes" { expectAllowed = try Probe.privilegedSession(configuration: config, helperPath: stagedBinary).ready }
-        if expectAllowed, config.usesPersistentTCP {
-            expectAllowed = (try? DedicatedEgress.group()).flatMap { group in
-                (try? Probe.trustedSurgePID()).flatMap { pid in
-                    (try? DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: group))
-                }
-            } == true
-        }
+        let expectAllowed = try CLI.check(helperPath: stagedBinary).ready
         do {
             if upgrading { try stop() }
             do {

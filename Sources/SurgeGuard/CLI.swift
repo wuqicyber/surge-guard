@@ -59,14 +59,14 @@ enum CLI {
         return .enhanced
     }
 
-    static func check(_ args: [String]) throws -> CheckReport {
+    static func check(_ args: [String] = ["check"], helperPath: String = Paths.binary) throws -> CheckReport {
         let configuration = try policy(args)
         let readiness = try Probe.readiness()
         var report = CheckReport(ready: readiness.ready, mode: configuration.mode,
                                  readiness: readiness, reasons: readiness.reasons)
         if configuration.mode == "routes" {
             do {
-                let session = try geteuid() == 0 ? Probe.privilegedSession(configuration: configuration) : Probe.session(configuration: configuration)
+                let session = try geteuid() == 0 ? Probe.privilegedSession(configuration: configuration, helperPath: helperPath) : Probe.session(configuration: configuration)
                 report.session = session
                 if !session.ready {
                     if session.mode != "rule" { report.reasons.append("outbound_mode_is_\(session.mode)") }
@@ -86,6 +86,7 @@ enum CLI {
                       try DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: group) else {
                     throw GuardError("surge_egress_identity_mismatch")
                 }
+                _ = try Probe.surgeInterface()
             } catch {
                 report.ready = false
                 report.reasons.append("persistent_tcp_not_ready: \(error)")
