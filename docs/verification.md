@@ -1197,3 +1197,84 @@ Sparkle update or live PF mutation. PF checks were parse-only. State/file/native
 child tests do not certify the full live crash/shutdown sequence or packet-level
 protection. The signed-pathname execution race and UDP/early-boot limitations
 remain as documented; ordinary-user ownership of Surge.app was not changed.
+
+## 2026-10-20 — strict source review of 579f647
+
+Reviewed the changes in 0f7038c and 579f647 together with their callers across
+Core, Guard, Gate, the C launcher, SwiftBar integrations, scripts, tests and
+operational documentation. This entry records source/fixture verification;
+it does not supersede the scope of earlier live acceptance entries.
+
+Corrected:
+
+- Candidate changes now invalidate signature trust before the allowed-state
+  early return and invalidate route generations even while blocked. Signature
+  validation rechecks the candidate inventory before caching a new identity;
+  the final opening check also requires a non-nil route observation.
+- Recover-launch takes request.lock before the launch-record lock. The service
+  rechecks its observed launch record under request.lock before consuming a
+  shutdown request, avoiding rejection based on a just-recovered orphan.
+- Throwing lock initialization now has one FD owner. An isolated native Swift
+  check confirmed that deinit executes after a fully initialized initializer
+  throws; the old catch-plus-deinit path closed the descriptor twice. Audit
+  pipes are allocated after throwing initialization steps have completed.
+- Interface inventory/conversion failures propagate instead of becoming an
+  empty/partial cleanup list. Block rules load before address enumeration;
+  failed enumeration cannot report verified old-state cleanup.
+- Audit diagnostics have bounded line/chunk memory and synchronous consumption
+  rather than an unbounded main-queue backlog. A native pipe experiment showed
+  that FileHandle.read(upToCount:) can wait for EOF/full input on macOS; the new
+  reader uses POSIX read and retries EINTR. A pipe regression requires delivery
+  while the writer remains open, in addition to EOF and oversized-line cases.
+- The audit supervisor persists its process group before child launch. Stop
+  checks the job again after lock release, reads the latest supervisor snapshot
+  and waits for recorded groups, covering an unpublished child PID and a
+  replacement supervisor. Parent identity is rechecked after group rejoining.
+- Retained capture scans compare the named inode as well as the open file's
+  size/mtime/ctime, so rotation cannot silently present an obsolete inode as the
+  currently named ring segment.
+- Service parsing rejects absent/duplicate state fields, root managers use
+  the shared parser, and stop/unlock confirm job absence after acquiring the
+  runtime lock. The independent shell recovery path also validates state and
+  the native PID range. A current-boot unlock marker is considered before an
+  undeleted old snapshot.
+- Menu duration conversion rejects invalid/out-of-range timestamps instead of
+  trapping on Double-to-Int conversion. Persisted update dates are bounded;
+  resume acknowledges only recognized recovery/waiting states, including a
+  fresh Gate whose network status is still unknown.
+- Dedicated-group installation writes its protected GID reservation before
+  directory-service creation. A retry retains that identity and rejects an
+  occupied or malformed reservation; it never adopts an unrecorded old group.
+- Removed the README's immediate bootout/anchor-flush recipe in favor of the
+  existing independent helper, and aligned the Chinese README, audit contract,
+  acceptance steps and AGENTS.md with the corrected behavior.
+
+Performed:
+
+- Final `./scripts/check.sh` exited zero: 53 Swift check groups plus the native
+  C launcher group, release compilation with warnings as errors, generic policy
+  validation, help/log-format smoke checks, shell syntax and git diff checks.
+  There were no build warnings or errors.
+- New/extended fixtures exercise early-return ambiguity and candidate changes
+  during signature validation; stale launch observations after exact-nonce
+  recovery; repeated failed lock construction and FD counts; interface-query
+  failure; large/partial/live-pipe diagnostics and consumer failure; a child
+  group surviving its original parent; capture inode replacement; malformed
+  service state/PID; extreme menu/update times; and reserved-GID retry/collision.
+- Native PF checks used parse-only `-n`. Recovery and installer fixtures used
+  fake tools and temporary directories. The process-group fixtures created
+  only disposable test subprocesses, without starting packet capture.
+- Both newly built `status --json` commands returned valid JSON while reading
+  the existing services (Guard allowed, Gate ready). The new SwiftBar section
+  rendered both components, independent unlock and ordered power actions.
+  No displayed action was executed.
+- The original untracked package-lock.json retained its SHA-256
+  `c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719`.
+
+Not performed: no menu/service installation or restart, Surge quit/update,
+new real packet recording, root group mutation, real recovery/power command,
+live PF mutation, or live crash/queue/disk-failure injection. The lock, pipe,
+process and state fixtures do not certify the complete live shutdown or crash
+sequence. These fixes are in source/build artifacts, not the running services.
+The mutable signed-pathname execution boundary, UDP scope and early-boot limits
+remain unchanged; Surge.app ownership and Sparkle update behavior were preserved.

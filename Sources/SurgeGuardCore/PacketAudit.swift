@@ -16,9 +16,40 @@ public enum PacketAudit {
 
     public static func joinParentProcessGroup() throws {
         let parent = getppid(), group = getpgid(parent)
-        guard parent > 1, group > 0, setpgid(0, group) == 0 else {
+        guard parent > 1, group > 0, setpgid(0, group) == 0, getppid() == parent else {
             throw GuardError("Cannot join audit supervisor process group")
         }
+    }
+
+    public static func waitForProcessGroupExit(_ group: pid_t, timeout: TimeInterval = 20) throws {
+        guard group > 1, group != getpgrp() else { throw GuardError("Unsafe capture process group") }
+        let deadline = SystemClock.seconds + timeout
+        while kill(-group, 0) == 0 || errno != ESRCH {
+            guard SystemClock.seconds < deadline else { throw GuardError("Capture process group has not exited; refusing to replace recording files") }
+            usleep(50_000)
+        }
+    }
+
+    public static func readDiagnostics(_ handle: FileHandle, consume: (String) throws -> Void) throws {
+        var pending = Data()
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        while true {
+            // FileHandle.read(upToCount:) can wait for a full buffer on a live macOS pipe.
+            let count = Darwin.read(handle.fileDescriptor, &buffer, buffer.count)
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw GuardError("Cannot read capture diagnostics: errno \(errno)")
+            }
+            pending.append(contentsOf: buffer.prefix(count))
+            while let index = pending.firstIndex(of: 10) {
+                guard pending.distance(from: pending.startIndex, to: index) <= 65_536 else { throw GuardError("Capture diagnostic line exceeded limits") }
+                try consume(String(decoding: pending[..<index], as: UTF8.self))
+                pending.removeSubrange(...index)
+            }
+            guard pending.count <= 65_536 else { throw GuardError("Capture diagnostic line exceeded limits") }
+        }
+        if !pending.isEmpty { try consume(String(decoding: pending, as: UTF8.self)) }
     }
 
     public static func arguments(megabytes: Int) throws -> [String] {
@@ -104,10 +135,17 @@ public struct PacketCaptureRange: Codable {
             result.packets += 1
             if SystemClock.seconds >= deadline { result.readError = "Capture scan timed out; range is partial"; break }
         }
-        var after = stat()
-        result.changedDuringRead = fstat(fd, &after) != 0 || before.st_size != after.st_size ||
-            before.st_mtimespec.tv_sec != after.st_mtimespec.tv_sec || before.st_mtimespec.tv_nsec != after.st_mtimespec.tv_nsec
+        result.changedDuringRead = !unchanged(path, descriptor: fd, initial: before)
         return result
+    }
+
+    public static func unchanged(_ path: String, descriptor: Int32, initial: stat) -> Bool {
+        var after = stat(), named = stat()
+        return fstat(descriptor, &after) == 0 && lstat(path, &named) == 0 &&
+            named.st_dev == initial.st_dev && named.st_ino == initial.st_ino &&
+            initial.st_size == after.st_size &&
+            initial.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec && initial.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec &&
+            initial.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec && initial.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec
     }
 }
 
@@ -183,6 +221,7 @@ public struct PacketAuditSnapshot: Codable {
     public var runId = UUID().uuidString
     public var pid = getpid()
     public var capturePid: Int32?
+    public var processGroup: Int32?
     public var checkedAt = Date()
     public var checkedUptime = SystemClock.seconds
     public var startedAt = Date()

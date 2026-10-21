@@ -19,7 +19,6 @@ final class Daemon {
     var surgeConnection: SCNetworkConnection?
     var surgeConnectionService: String?
     var surgeTrust = SurgeProcessTrust()
-    var lastSurgeCandidates: [SurgeProcess] = []
     var surgeWatchGeneration = 0
     var nextFirewallAudit: Double = 0
     let runID = UUID().uuidString
@@ -52,11 +51,16 @@ final class Daemon {
 
     func surgeProcessTrusted() throws -> Bool {
         let candidates = try Probe.surgeCandidates()
-        // Block a changed process before signature checks can replace its watcher and cached route trust.
-        if allowed, !surgeTrust.matches(candidates: candidates) { return false }
-        let sameCandidates = candidates == lastSurgeCandidates
-        lastSurgeCandidates = candidates
-        let candidate = try surgeTrust.trustedPID(candidates: candidates, validate: Probe.surgeSignatureValid)
+        let revision = surgeTrust.revision
+        let retained = surgeTrust.observe(candidates: candidates)
+        if surgeTrust.revision != revision { invalidateSession() }
+        // Invalidate even on the early block path and when PF was already blocked.
+        if allowed, !retained { return false }
+        let observedRevision = surgeTrust.revision
+        defer { if surgeTrust.revision != observedRevision { invalidateSession() } }
+        let candidate = try surgeTrust.trustedPID(candidates: candidates, validate: Probe.surgeSignatureValid,
+                                                 recheck: Probe.surgeCandidates)
+        let sameCandidates = surgeTrust.revision == revision
         if let pid = candidate, sameCandidates, trustedSurgePID == pid, kill(pid, 0) == 0 { return true }
         trustedSurgePID = nil
         surgeExitSource?.cancel()
@@ -87,14 +91,18 @@ final class Daemon {
         return true
     }
 
+    func invalidateSession() {
+        generation += 1
+        session = nil
+        sessionChecked = 0
+        nextSessionProbe = 0
+        sessionFailure = "rule_probe_pending"
+    }
+
     func updateSession(_ config: Configuration, force: Bool) {
         let now = SystemClock.seconds
         if force {
-            generation += 1
-            session = nil
-            sessionChecked = 0
-            nextSessionProbe = 0
-            sessionFailure = "rule_probe_pending"
+            invalidateSession()
         }
         guard !probing, now >= nextSessionProbe else { return }
         probing = true
@@ -175,11 +183,7 @@ final class Daemon {
                 let timing = try firewall.block()
                 allowed = false
                 firewallVerified = timing.statesClearedUptime
-                generation += 1
-                session = nil
-                sessionChecked = 0
-                nextSessionProbe = 0
-                sessionFailure = "rule_probe_pending"
+                invalidateSession()
                 let snapshot = GuardSnapshot(runId: runID, firewallVerifiedUptime: firewallVerified, allowed: false,
                                              configurationMode: configuration?.mode ?? "invalid", readiness: nil,
                                              session: nil, reasons: [loss], enforcement: configuration?.enforcement ?? "surge_readiness_gate")
@@ -191,7 +195,7 @@ final class Daemon {
                                          "event_to_rules_loaded_ms": max(0, (timing.rulesLoadedUptime - received) * 1000),
                                          "event_to_block_verified_ms": max(0, (timing.statesClearedUptime - received) * 1000)])
             }
-            firewall.rememberAddresses()
+            try firewall.rememberAddresses()
             let now = SystemClock.seconds
             if forceFirewallAudit || now >= nextFirewallAudit {
                 nextFirewallAudit = now + 5
@@ -217,11 +221,7 @@ final class Daemon {
                         allowed = false
                         firewallVerified = SystemClock.seconds
                     }
-                    generation += 1
-                    session = nil
-                    sessionChecked = 0
-                    nextSessionProbe = 0
-                    sessionFailure = "rule_probe_pending"
+                    invalidateSession()
                     configuration = config
                     EventLog.write("configuration_loaded", message: "Validated policy configuration", details: ["mode": config!.mode, "run_id": runID])
                 }
@@ -268,7 +268,7 @@ final class Daemon {
                     reasons.append(contentsOf: observation?.reasons ?? [])
                     if let loss = try watchSurgeConnection(), !reasons.contains(loss) { reasons.append(loss) }
                 } catch { reasons.append("readiness_probe_failed: \(error)") }
-                if config?.mode == "routes", SystemClock.seconds - sessionChecked >= 3 { reasons.append("rule_probe_expired") }
+                if config?.mode == "routes", session == nil || SystemClock.seconds - sessionChecked >= 3 { reasons.append("rule_probe_expired") }
                 if config?.usesPersistentTCP == true {
                     do {
                         guard let group = egressGroup, let pid = trustedSurgePID,

@@ -8,6 +8,11 @@ public enum SystemClock {
         return Double(mach_continuous_time()) * Double(scale.numer) / Double(scale.denom) / 1_000_000_000
     }
 
+    public static func elapsedSeconds(since start: Double, now: Double) -> Int? {
+        guard start.isFinite, now.isFinite, start >= 0, now >= start else { return nil }
+        return Int(exactly: (now - start).rounded(.down))
+    }
+
     public static var bootID: String {
         var size = 0
         guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 1 else { return "" }
@@ -79,15 +84,15 @@ public struct StatusReport: Codable {
         } catch {
             return StatusReport(state: "unknown", daemonRunning: false, snapshot: nil, reason: "service_query_failed: \(error)")
         }
+        if !serviceRunning, let marker = try? readUnlockMarker(), marker == SystemClock.bootID, !marker.isEmpty {
+            return StatusReport(state: "unlocked", daemonRunning: false, snapshot: nil, reason: "manual_unlock_until_start_or_reboot")
+        }
         do {
             try RootFiles.verify(Paths.publicState, directory: true)
             try RootFiles.verify(Paths.snapshot)
             let snapshot = try JSON.decode(GuardSnapshot.self, from: Data(contentsOf: URL(fileURLWithPath: Paths.snapshot)))
             return try evaluate(service: service, snapshot: snapshot)
         } catch {
-            if !serviceRunning, let marker = try? readUnlockMarker(), marker == SystemClock.bootID, !marker.isEmpty {
-                return StatusReport(state: "unlocked", daemonRunning: false, snapshot: nil, reason: "manual_unlock_until_start_or_reboot")
-            }
             return StatusReport(state: "unknown", daemonRunning: serviceRunning, snapshot: nil, reason: "status_unavailable: \(error)")
         }
     }
@@ -122,7 +127,9 @@ public struct StatusReport: Codable {
             throw GuardError("launchctl status \(service.status): \(service.combined.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let lines = service.output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-        guard lines.contains("state = running") else { return nil }
+        let states = lines.filter { $0.hasPrefix("state = ") }
+        guard states.count == 1, states[0].count > "state = ".count else { throw GuardError("Service has no unique state") }
+        guard states[0] == "state = running" else { return nil }
         let pids = lines.filter { $0.hasPrefix("pid = ") }
         guard pids.count == 1, let pid = Int32(pids[0].dropFirst(6)), pid > 1 else {
             throw GuardError("Running service has no unique valid PID")

@@ -4,8 +4,8 @@ import SurgeGuardCore
 
 final class PacketAuditService {
     let task = Process()
-    let pipe = Pipe()
-    let lock: Int32
+    let pipe: Pipe
+    let lock: RuntimeLock
     var snapshot: PacketAuditSnapshot
     var statistics = PacketCaptureStatistics()
     var listening = false
@@ -28,15 +28,13 @@ final class PacketAuditService {
         let configuration = try PacketAuditConfiguration.load()
         snapshot = PacketAuditSnapshot(capacityMegabytes: configuration.capacityMegabytes)
         snapshot.timeZone = configuration.timeZone
-        lock = open(PacketAudit.directory + "/capture.lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard lock >= 0 else { throw GuardError("Cannot open packet audit lock") }
-        do {
-            try RootFiles.verify(PacketAudit.directory + "/capture.lock")
-            try RuntimeLock.acquire(lock, timeout: 0)
-        } catch { close(lock); throw error }
+        let fd = open(PacketAudit.directory + "/capture.lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        lock = try RuntimeLock(taking: fd)
+        try RootFiles.verify(PacketAudit.directory + "/capture.lock")
+        pipe = Pipe()
     }
 
-    deinit { close(lock); try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
+    deinit { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
 
     func publish() throws {
         snapshot.checkedAt = Date()
@@ -225,6 +223,8 @@ final class PacketAuditService {
 
     func run() throws {
         umask(0o077)
+        guard getpgrp() == getpid() else { throw GuardError("Packet audit requires its own supervisor process group") }
+        snapshot.processGroup = getpgrp()
         if let previous = try? String(contentsOfFile: PacketAudit.snapshot) {
             try event("audit_capture_gap", "New capture session; traffic between sessions and overwritten history cannot be reconstructed",
                       ["previous_snapshot": String(previous.prefix(8192))])
@@ -250,26 +250,13 @@ final class PacketAuditService {
         snapshot.capturePid = task.processIdentifier
         do { try publish() } catch { fail(error) }
         DispatchQueue.global(qos: .utility).async {
-            defer { try? self.pipe.fileHandleForReading.close() }
-            var pending = Data()
-            while true {
-                let data = self.pipe.fileHandleForReading.availableData
-                if data.isEmpty { break }
-                pending.append(data)
-                if pending.count > 65_536 {
-                    DispatchQueue.main.async { self.fail(GuardError("Capture diagnostic line exceeded limits")) }
-                    pending.removeAll()
+            do {
+                try PacketAudit.readDiagnostics(self.pipe.fileHandleForReading) { line in
+                    // Backpressure bounds both pipe data and main-queue work.
+                    try DispatchQueue.main.sync { try self.ingest(line) }
                 }
-                while let index = pending.firstIndex(of: 10) {
-                    let line = String(decoding: pending[..<index], as: UTF8.self)
-                    pending.removeSubrange(...index)
-                    DispatchQueue.main.async { do { try self.ingest(line) } catch { self.fail(error) } }
-                }
-            }
-            if !pending.isEmpty {
-                let line = String(decoding: pending, as: UTF8.self)
-                DispatchQueue.main.async { do { try self.ingest(line) } catch { self.fail(error) } }
-            }
+            } catch { DispatchQueue.main.sync { self.fail(error) } }
+            try? self.pipe.fileHandleForReading.close()
             self.task.waitUntilExit()
             DispatchQueue.main.async { self.finish() }
         }

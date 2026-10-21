@@ -214,9 +214,9 @@ public enum Probe {
         return observation
     }
 
-    public static func addresses() -> [InterfaceAddress] {
+    public static func addresses(query: (UnsafeMutablePointer<UnsafeMutablePointer<ifaddrs>?>) -> Int32 = getifaddrs) throws -> [InterfaceAddress] {
         var first: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&first) == 0 else { return [] }
+        guard query(&first) == 0 else { throw GuardError("Cannot enumerate interface addresses: errno \(errno)") }
         defer { freeifaddrs(first) }
         var result: [InterfaceAddress] = []
         var current = first
@@ -227,7 +227,7 @@ public enum Probe {
                   address.pointee.sa_family == UInt8(AF_INET) || address.pointee.sa_family == UInt8(AF_INET6) else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host,
-                              socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+                              socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { throw GuardError("Cannot decode interface address") }
             result.append(InterfaceAddress(name: String(cString: info.ifa_name),
                                            address: String(cString: host).components(separatedBy: "%")[0],
                                            up: info.ifa_flags & UInt32(IFF_UP) != 0,
@@ -239,8 +239,7 @@ public enum Probe {
     public static func trustedSurgePID() throws -> pid_t? {
         let candidates = try surgeCandidates()
         var trust = SurgeProcessTrust()
-        let pid = try trust.trustedPID(candidates: candidates, validate: surgeSignatureValid)
-        return try surgeCandidates() == candidates ? pid : nil
+        return try trust.trustedPID(candidates: candidates, validate: surgeSignatureValid, recheck: surgeCandidates)
     }
 
     public static func surgeCandidates() throws -> [SurgeProcess] {
@@ -291,7 +290,7 @@ public enum Probe {
               let primary = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
               let service = primary["PrimaryService"] as? String, isSurgeService(service, store: store),
               let interface = primary["PrimaryInterface"] as? String,
-              addresses().contains(where: { $0.name == interface && $0.up && $0.address == "198.18.0.1" }) else {
+              try addresses().contains(where: { $0.name == interface && $0.up && $0.address == "198.18.0.1" }) else {
             throw GuardError("Verified Surge interface is unavailable")
         }
         return interface
@@ -329,7 +328,7 @@ public enum Probe {
         let surgeService = isSurgeService(service, store: store)
         let connection = surgeService ? SCNetworkConnectionCreateWithServiceID(nil, service as CFString, nil, nil) : nil
         let connected = connection.map { SCNetworkConnectionGetStatus($0) == .connected } ?? false
-        let vifUp = interface.hasPrefix("utun") && addresses().contains {
+        let vifUp = try interface.hasPrefix("utun") && addresses().contains {
             $0.name == interface && $0.up && $0.address == "198.18.0.1"
         }
         let route = try Command.checked("/sbin/route", ["-n", "get", "default"])

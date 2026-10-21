@@ -28,6 +28,62 @@ func rejects(_ operation: () throws -> Void) throws {
 }
 
 do {
+    try check(SystemClock.elapsedSeconds(since: 2.2, now: 4.9) == 2, "Elapsed seconds were rounded incorrectly")
+    for start in [-1e300, 1e300, Double.nan, Double.infinity, -1, 20] {
+        try check(SystemClock.elapsedSeconds(since: start, now: 10) == nil, "Invalid menu timestamp could overflow or masquerade as fresh")
+    }
+    try check(SystemClock.elapsedSeconds(since: 0, now: 1e300) == nil, "Elapsed seconds overflow accepted")
+    try rejects { _ = try Probe.addresses(query: { _ in errno = ENOMEM; return -1 }) }
+    _ = try Probe.addresses()
+    print("PASS: bounded timestamp conversion and explicit interface inventory failures")
+
+    let diagnosticURL = FileManager.default.temporaryDirectory.appendingPathComponent("audit-diagnostics-" + UUID().uuidString)
+    do {
+        defer { try? FileManager.default.removeItem(at: diagnosticURL) }
+        func readDiagnostics(_ text: String, consume: (String) throws -> Void) throws {
+            try AtomicFile.write(text, to: diagnosticURL.path, mode: 0o600)
+            let handle = try FileHandle(forReadingFrom: diagnosticURL)
+            defer { try? handle.close() }
+            try PacketAudit.readDiagnostics(handle, consume: consume)
+        }
+        var rows: [String] = []
+        try readDiagnostics(String(repeating: "line\n", count: 20_000) + String(repeating: "x", count: 65_536) + "\n尾行") { rows.append($0) }
+        try check(rows.count == 20_002 && rows[20_000].count == 65_536 && rows.last == "尾行", "Diagnostic chunking dropped lines or final unterminated text")
+        for suffix in ["", "\n"] {
+            try rejects { try readDiagnostics(String(repeating: "x", count: 65_537) + suffix) { _ in } }
+        }
+        var consumed = 0
+        try rejects { try readDiagnostics("one\ntwo\n") { _ in consumed += 1; throw GuardError("consumer failed") } }
+        try check(consumed == 1, "Diagnostic producer ran past a failed synchronous consumer")
+    }
+    let diagnosticPipe = Pipe(), diagnosticLine = DispatchSemaphore(value: 0), diagnosticDone = DispatchGroup()
+    final class DiagnosticResult: @unchecked Sendable { var error: Error? }
+    let diagnosticResult = DiagnosticResult()
+    diagnosticDone.enter()
+    DispatchQueue.global().async {
+        defer { try? diagnosticPipe.fileHandleForReading.close(); diagnosticDone.leave() }
+        do { try PacketAudit.readDiagnostics(diagnosticPipe.fileHandleForReading) { if $0 == "ready" { diagnosticLine.signal() } } }
+        catch { diagnosticResult.error = error }
+    }
+    try diagnosticPipe.fileHandleForWriting.write(contentsOf: Data("ready\n".utf8))
+    let deliveredBeforeEOF = diagnosticLine.wait(timeout: .now() + 1) == .success
+    try diagnosticPipe.fileHandleForWriting.close()
+    let diagnosticCompleted = diagnosticDone.wait(timeout: .now() + 3) == .success
+    try check(deliveredBeforeEOF && diagnosticCompleted && diagnosticResult.error == nil,
+              "Capture diagnostics waited for EOF/full buffer instead of delivering live statistics")
+
+    let orphanGroup = Process()
+    orphanGroup.executableURL = URL(fileURLWithPath: "/bin/sh")
+    orphanGroup.arguments = ["-c", "sleep 0.5 >/dev/null 2>&1 & exit 0"]
+    orphanGroup.standardInput = FileHandle.nullDevice; orphanGroup.standardOutput = FileHandle.nullDevice; orphanGroup.standardError = FileHandle.nullDevice
+    try orphanGroup.run()
+    let orphanGroupID = orphanGroup.processIdentifier
+    orphanGroup.waitUntilExit()
+    try rejects { try PacketAudit.waitForProcessGroupExit(orphanGroupID, timeout: 0.05) }
+    try PacketAudit.waitForProcessGroupExit(orphanGroupID, timeout: 3)
+    try rejects { try PacketAudit.waitForProcessGroupExit(getpgrp(), timeout: 0) }
+    print("PASS: bounded capture diagnostics, consumer failure and surviving child process-group drain")
+
     let auditArguments = try PacketAudit.arguments(megabytes: 256)
     try check(auditArguments.contains("pktap,all") && auditArguments.contains("-W") && auditArguments.contains("8") &&
               auditArguments[auditArguments.firstIndex(of: "-C")! + 1] == "32" && !auditArguments.contains("-I"),
@@ -104,6 +160,15 @@ do {
         let range = try PacketCaptureRange.read(source, owner: getuid(), maximumBytes: 4_000_000)
         try check(range.packets == 40 && abs(range.earliest!.timeIntervalSince1970 - 1.123456) < 0.00001 &&
                   abs(range.latest!.timeIntervalSince1970 - 40.123456) < 0.00001 && range.readError == nil, "Retained pcap time range was inferred from file modification times")
+        let rangeFD = open(source, O_RDONLY | O_CLOEXEC)
+        guard rangeFD >= 0 else { throw GuardError("Cannot open range identity fixture") }
+        defer { close(rangeFD) }
+        var rangeInitial = stat(); try check(fstat(rangeFD, &rangeInitial) == 0, "Cannot stat range fixture")
+        try check(PacketCaptureRange.unchanged(source, descriptor: rangeFD, initial: rangeInitial), "Stable capture appeared replaced")
+        let movedSource = source + ".previous"
+        try FileManager.default.moveItem(atPath: source, toPath: movedSource)
+        try pcap.write(to: URL(fileURLWithPath: source)); chmod(source, 0o600)
+        try check(!PacketCaptureRange.unchanged(source, descriptor: rangeFD, initial: rangeInitial), "Rotated filename retained obsolete inode coverage")
         let output = captureDirectory.appendingPathComponent("ring").path
         _ = try Command.checked("/usr/sbin/tcpdump", ["-r", source, "-C", "1", "-W", "2", "-w", output], timeout: 5)
         let ringFiles = try FileManager.default.contentsOfDirectory(atPath: captureDirectory.path).filter { $0.hasPrefix("ring") }
@@ -378,6 +443,14 @@ do {
         guard first >= 0, second >= 0 else { throw GuardError("Cannot create lock fixture") }
         defer { close(first); close(second); try? FileManager.default.removeItem(at: lockURL) }
         try RuntimeLock.acquire(first, timeout: 0)
+        let beforeLocks = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0
+        for _ in 0..<100 {
+            let blocked = open(lockURL.path, O_RDWR | O_CLOEXEC)
+            try rejects { _ = try RuntimeLock(taking: blocked) }
+            try check(fcntl(blocked, F_GETFD) == -1 && errno == EBADF, "Failed lock initializer retained its FD")
+        }
+        let afterLocks = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0
+        try check(afterLocks <= beforeLocks + 1, "Failed lock construction leaked descriptors")
         try rejects { try RuntimeLock.acquire(second, timeout: 0.06) }
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { flock(first, LOCK_UN) }
         try RuntimeLock.acquire(second, timeout: 1)
@@ -437,10 +510,12 @@ do {
             fi
             if [ "$1" = print ] && [ -f '\(directory)/waiting' ] && [ ! -f '\(directory)/stopped' ]; then echo 'state = waiting'; exit 0; fi
             if [ "$1" = print ] && [ -f '\(directory)/query-failed' ]; then echo 'Service query failed' >&2; exit 5; fi
+            if [ "$1" = print ] && [ -f '\(directory)/malformed-state' ]; then echo 'pid = 1234'; exit 0; fi
+            if [ "$1" = print ] && [ -f '\(directory)/oversized-pid' ]; then printf 'state = running\\npid = 2147483648\\n'; exit 0; fi
             if [ "$1" = print ] && [ -f '\(directory)/missing-pid' ]; then echo 'state = running'; exit 0; fi
             if [ "$1" = print ] && [ -f '\(directory)/absent' ]; then echo 'Could not find service' >&2; exit 113; fi
             case "$1" in
-              print) if [ -f '\(directory)/stopped' ]; then echo 'Could not find service'; exit 113; fi; if [ -f '\(directory)/restarted' ]; then echo 'pid = 5678'; else echo 'pid = 1234'; fi ;;
+              print) if [ -f '\(directory)/stopped' ]; then echo 'Could not find service'; exit 113; fi; echo 'state = running'; if [ -f '\(directory)/restarted' ]; then echo 'pid = 5678'; else echo 'pid = 1234'; fi ;;
               bootout) touch '\(directory)/stopped' ;;
               kill) touch '\(directory)/restarted' ;;
             esac ;;
@@ -507,6 +582,14 @@ do {
         let queryFailureSafe = failedQuery.status != 0 && !failedQueryCalls.contains("-F rules")
         try check(binaryIndependent && queryFailureSafe, "Recovery depends on guard help or flushes after an unknown query: binaryIndependent=\(binaryIndependent), queryFailureSafe=\(queryFailureSafe)")
         try FileManager.default.removeItem(atPath: directory + "/query-failed")
+        for fixture in ["malformed-state", "oversized-pid"] {
+            try "".write(toFile: directory + "/" + fixture, atomically: true, encoding: .utf8)
+            try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+            let malformed = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
+            try check(malformed.status != 0 && !String(contentsOfFile: directory + "/calls").contains("-F rules"), "Malformed service query allowed anchor clearing")
+            try FileManager.default.removeItem(atPath: directory + "/" + fixture)
+        }
+
         try "".write(toFile: directory + "/missing-pid", atomically: true, encoding: .utf8)
         try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
         let missingPID = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
@@ -655,6 +738,17 @@ do {
     try check((try? DedicatedEgress.identityMatches(pid: Int32.max, uid: 501, group: 60000)) != true, "Missing process was trusted")
     print("PASS: persistent TCP opt-in, legacy encoding, interface-bound rules and strict egress identity")
 
+    try check(try DedicatedEgress.availableGroup(record: nil, occupied: { $0 == 60_000 }) == 60_001,
+              "Fresh dedicated group selection reused an occupied ID")
+    try check(try DedicatedEgress.availableGroup(record: ["gid": 60_004], occupied: { _ in false }) == 60_004,
+              "Interrupted group creation did not retain its reserved identity")
+    for record: [String: UInt32] in [["gid": 20], [:], ["gid": 60_000, "other": 1]] {
+        try rejects { _ = try DedicatedEgress.availableGroup(record: record, occupied: { _ in false }) }
+    }
+    try rejects { _ = try DedicatedEgress.availableGroup(record: ["gid": 60_004], occupied: { _ in true }) }
+    try rejects { _ = try DedicatedEgress.availableGroup(record: nil, occupied: { _ in true }) }
+    print("PASS: dedicated group installation retries preserve recorded identity and reject collisions")
+
     let processA = SurgeProcess(pid: 100, startedSeconds: 1, startedMicroseconds: 1)
     let processB = SurgeProcess(pid: 101, startedSeconds: 2, startedMicroseconds: 2)
     var processTrust = SurgeProcessTrust()
@@ -675,6 +769,18 @@ do {
     try check(try processTrust.trustedPID(candidates: [], validate: signature) == nil, "Empty process inventory trusted")
     try rejects { _ = try processTrust.trustedPID(candidates: [processA], validate: { _ in throw GuardError("fixture") }) }
     try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100, "Failed signature query poisoned recovery")
+    let beforeAmbiguity = processTrust.revision
+    try check(!processTrust.observe(candidates: [processA, processB]) && processTrust.revision != beforeAmbiguity,
+              "Early ambiguity path retained cached signature or route revision")
+    let queriesBeforeRecovery = signatureQueries
+    try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100 && signatureQueries == queriesBeforeRecovery + 1,
+              "Early blocking skipped signature cache invalidation")
+    processTrust = SurgeProcessTrust()
+    try check(try processTrust.trustedPID(candidates: [processA], validate: signature, recheck: { [processA, processB] }) == nil,
+              "Candidate appearing during signature validation was trusted")
+    let changedRevision = processTrust.revision
+    try check(try processTrust.trustedPID(candidates: [processA], validate: signature, recheck: { [processA] }) == 100 &&
+              processTrust.revision != changedRevision, "Return from ambiguous inventory did not invalidate prior route generation")
     _ = try Probe.surgeCandidates()
     print("PASS: native process inventory and trust invalidation on second instance, disappearance and PID reuse")
 
@@ -780,6 +886,14 @@ do {
 
     let pause = GateUpdate(paused: true), resume = GateUpdate(paused: false)
     let pauseData = Data(try JSON.encode(pause).utf8)
+    for date in [-1e300, 1e300, -1] {
+        var malformedUpdate = try JSONSerialization.jsonObject(with: pauseData) as! [String: Any]
+        malformedUpdate["changed_at"] = date
+        try rejects { _ = try GateUpdate.decode(JSONSerialization.data(withJSONObject: malformedUpdate)) }
+    }
+    for state in ["stopped", "future_state", ""] {
+        try check(!resume.acknowledged(by: resume, state: state, fresh: true), "Unknown state acknowledged automatic recovery")
+    }
     try check(try GateUpdate.decode(pauseData) == pause, "Update mode lost its durable identity")
     try check(pause.acknowledged(by: pause, state: "update_paused", fresh: true), "Fresh matching pause was not acknowledged")
     try check(!pause.acknowledged(by: pause, state: "ready", fresh: true) &&
@@ -788,7 +902,8 @@ do {
               !resume.acknowledged(by: pause, state: "update_paused", fresh: true) &&
               !resume.acknowledged(by: resume, state: "recovery_failed", fresh: true),
               "Stale, different or unfinished update request acknowledged")
-    try check(resume.acknowledged(by: resume, state: "waiting", fresh: true), "Resume incorrectly required network permission")
+    try check(resume.acknowledged(by: resume, state: "waiting", fresh: true) &&
+              resume.acknowledged(by: resume, state: "unknown", fresh: true), "Resume incorrectly required verified network permission")
     for bad in ["{}", "{\"paused\":true}", String(repeating: " ", count: 4097),
                 String(decoding: pauseData, as: UTF8.self).replacingOccurrences(of: "\"version\":1", with: "\"version\":2")] {
         try rejects { _ = try GateUpdate.decode(Data(bad.utf8)) }
@@ -1064,6 +1179,9 @@ do {
     for pids in ["pid = 1", "pid = 123\npid = malformed", "pid = 123\npid = 456"] {
         try rejects { _ = try StatusReport.servicePID(Command.run("/usr/bin/printf", ["state = running\n" + pids + "\n"])) }
     }
+    for malformed in ["", "pid = 123\n", "state = running\nstate = waiting\npid = 123\n", "state = \n"] {
+        try rejects { _ = try StatusReport.serviceLoaded(Command.run("/usr/bin/printf", [malformed])) }
+    }
     try check(try StatusReport.servicePID(mockService) == 123 && StatusReport.servicePID(waitingJob) == nil,
               "Restart identity was not read from the actual service")
     var mismatchedSnapshot = GuardSnapshot(runId: "fixture", firewallVerifiedUptime: SystemClock.seconds,
@@ -1122,7 +1240,10 @@ do {
     try rejects { try GateShutdownRequest.validate(paused: false, pendingLaunch: reloaded, phase: .idle) }
     try check(!pause.acknowledged(by: pause, state: "launch_recovery_required", fresh: true) &&
               !resume.acknowledged(by: resume, state: "launch_recovery_required", fresh: true), "Orphaned launch acknowledged an update")
+    try check(try GatePendingLaunch.observationIsCurrent(reloaded, at: pendingPath), "Current launch observation rejected")
     try GatePendingLaunch.recover(id: orphan.id, observer: newObserver, at: pendingPath)
+    try check(!(try GatePendingLaunch.observationIsCurrent(reloaded, at: pendingPath)) &&
+              GatePendingLaunch.observationIsCurrent(nil, at: pendingPath), "Recovered marker allowed stale request consumption")
     try GateShutdownRequest.validate(paused: false, pendingLaunch: GatePendingLaunch.load(from: pendingPath), phase: .idle)
     try laterLaunch.save(at: pendingPath)
     try orphan.complete(at: pendingPath)

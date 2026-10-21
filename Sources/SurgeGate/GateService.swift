@@ -302,6 +302,8 @@ func run() throws {
             let preserve = shutdownPhase.preservesSession
             do {
                 defer { close(requestLock) }
+                // Recovery may have cleared the observed marker before we obtained this lock.
+                guard try GatePendingLaunch.observationIsCurrent(launchState?.request) else { continue }
                 request = try GateShutdownRequest.load()
                 if let queued = request {
                     try queued.withdraw()

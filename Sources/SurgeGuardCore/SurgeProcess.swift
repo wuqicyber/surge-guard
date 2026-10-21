@@ -31,13 +31,27 @@ public struct SurgeProcess: Codable, Equatable {
 
 public struct SurgeProcessTrust {
     private var verified: SurgeProcess?
+    private var observed: [SurgeProcess] = []
+    public private(set) var revision: UInt64 = 0
     public init() {}
 
     public func matches(candidates: [SurgeProcess]) -> Bool {
         candidates.count == 1 && verified != nil && candidates.first == verified
     }
 
-    public mutating func trustedPID(candidates: [SurgeProcess], validate: (pid_t) throws -> Bool) throws -> pid_t? {
+    @discardableResult
+    public mutating func observe(candidates: [SurgeProcess]) -> Bool {
+        if candidates != observed {
+            observed = candidates
+            verified = nil
+            revision &+= 1
+        }
+        return matches(candidates: candidates)
+    }
+
+    public mutating func trustedPID(candidates: [SurgeProcess], validate: (pid_t) throws -> Bool,
+                                    recheck: (() throws -> [SurgeProcess])? = nil) throws -> pid_t? {
+        observe(candidates: candidates)
         guard candidates.count == 1, let candidate = candidates.first, candidate.pid > 1 else {
             verified = nil
             return nil
@@ -45,6 +59,10 @@ public struct SurgeProcessTrust {
         if verified == candidate { return candidate.pid }
         verified = nil
         guard try validate(candidate.pid) else { return nil }
+        if let recheck {
+            let current = try recheck()
+            guard current == candidates else { observe(candidates: current); return nil }
+        }
         verified = candidate
         return candidate.pid
     }

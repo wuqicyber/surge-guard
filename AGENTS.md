@@ -44,6 +44,8 @@ Read README.md first. It is the operational contract for all three components.
 - Command must explicitly close every pipe end, including unused stdin pipes,
   on success, failed launch and timeout. Keep repeated-call descriptor checks.
   A failed service query is unknown, never evidence the daemon stopped.
+  Failed lock initialization must close its FD exactly once; do not assign the
+  owning stored property before throwing acquisition has finished.
 - Both event logs use EventFile: current plus one previous file, each at most
   1 MiB, with private ownership/permissions and a writer lock. Do not add
   unbounded service stdout/stderr files or log every unchanged polling tick.
@@ -54,6 +56,8 @@ Read README.md first. It is the operational contract for all three components.
   for actual lock/PID release, back up before replacement, verify fresh PF status
   after startup and attempt rollback on update failure. Never fix this with sleeps
   of a guessed duration or repeated forced restarts. Recovery must work offline.
+  Interface enumeration failure is an error, never an empty state-cleanup list;
+  load blocking rules before that query and do not claim verified cleanup on failure.
 - Independent emergency/log actions must not query the guard executable, even
   for help/capabilities. A service-query error is not service absence: refuse
   anchor clearing on unexpected errors or a running job without a valid PID.
@@ -77,7 +81,9 @@ Read README.md first. It is the operational contract for all three components.
   startup; `audit-start` explicitly re-enables it. Root must drop privileges
   before Surge request queries.
   Rejoin the supervisor process group before exec so launchd reaps the capture
-  child after crashes. Never equate a running collector, zero reported drops,
+  child after crashes. Publish its process group before spawning; stop waits for
+  the group even if the child PID was never published. Bound diagnostic input and
+  queued work, and keep the live-pipe-before-EOF regression. Never equate a running collector, zero reported drops,
   request-window overlap or absent request match with verified no-bypass coverage.
   Raw packet prefixes may contain payload; keep captures/request metadata private.
 - Optional `persistent_tcp` restricts ready-state non-loopback TCP to the verified
@@ -87,10 +93,14 @@ Read README.md first. It is the operational contract for all three components.
   fields (`cr_uid`, `p_ruid`, `cr_groups.0`, `p_rgid`) with exact `kinfo_proc` size
   and no `ps` fallback. Cache Surge code-signature trust only by `(pid, birthTime)`
   and invalidate immediately if a second `Surge` candidate process appears.
+  Candidate changes also invalidate route generations while blocked; recheck
+  candidates after signature validation before caching the result.
 - `SurgeGate` supports persistent `update-pause` / `update-resume` (`update-mode.json`)
   acknowledged by nonce + fresh status, plus `start` / `stop` / `restart`. Keep
   30s retry backoff on real launch/quit failures without penalizing post-launch
-  grace windows or waiting-for-block states. A timed-out launch is not cancelled:
+  grace windows or waiting-for-block states. Recover-launch takes request.lock
+  before the pending-launch lock; consumption rechecks its launch observation
+  under request.lock before withdrawing a queued shutdown. A timed-out launch is not cancelled:
   retain its private boot-bound pending marker until completion, and never
   acknowledge update pause while a launch remains unsettled. Publish shutdown
   requests before bootstrap, serialize submission/consumption, and preserve the

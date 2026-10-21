@@ -186,6 +186,8 @@ func queueShutdown(_ action: String) throws {
 }
 
 func recoverLaunch(_ id: UUID) throws {
+    let fd = try lock("request.lock", timeout: 2)
+    defer { close(fd) }
     let report = try readStatus()
     guard report.fresh, report.status.state == "launch_recovery_required", report.status.pendingLaunch?.id == id,
           let observer = report.status.runId else { throw GuardError("Inspect fresh Gate status for the exact orphaned launch ID") }

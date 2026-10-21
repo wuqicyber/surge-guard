@@ -24,7 +24,7 @@ public struct GateUpdate: Codable, Equatable {
             throw GuardError("Invalid update mode; automatic recovery remains paused")
         }
         let value = try JSON.decode(GateUpdate.self, from: data)
-        guard value.version == 1, value.changedAt.timeIntervalSince1970.isFinite,
+        guard value.version == 1, (0...253_402_300_799).contains(value.changedAt.timeIntervalSince1970),
               !value.reason.isEmpty, value.reason.utf8.count <= 512,
               !value.reason.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
             throw GuardError("Invalid update mode; automatic recovery remains paused")
@@ -38,7 +38,7 @@ public struct GateUpdate: Codable, Equatable {
 
     public func acknowledged(by update: GateUpdate?, state: String, fresh: Bool) -> Bool {
         fresh && update == self && (paused ? state == "update_paused" :
-            !["update_paused", "update_pausing", "launch_pending", "launch_recovery_required", "shutting_down", "shutdown_requested", "error", "recovery_failed"].contains(state))
+            ["ready", "restoring", "waiting", "waiting_identity", "unknown"].contains(state))
     }
 }
 
@@ -78,6 +78,11 @@ public struct GatePendingLaunch: Codable, Equatable {
     }
 
     public enum Disposition { case settled, inFlight, failed, orphaned }
+
+    public static func observationIsCurrent(_ observed: GatePendingLaunch?, at path: String = path) throws -> Bool {
+        try load(from: path) == observed
+    }
+
     public func disposition(observer: UUID, callbackPending: Bool, appRunning: Bool, childIdentity: SurgeProcess?) -> Disposition {
         if callbackPending { return .inFlight }
         if appRunning { return .settled }

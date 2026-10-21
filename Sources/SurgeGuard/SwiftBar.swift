@@ -29,10 +29,12 @@ enum SwiftBar {
                 lines.append("-- 保护范围：常驻限制覆盖 TCP；UDP 不在本模式的保护承诺内" + noteStyle)
             }
             let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
-            let age = max(0, Int(SystemClock.seconds - snapshot.checkedUptime))
-            let pfAge = max(0, Int(SystemClock.seconds - snapshot.firewallVerifiedUptime))
+            let age = SystemClock.elapsedSeconds(since: snapshot.checkedUptime, now: SystemClock.seconds)
+                .map { $0 == 0 ? "不到 1 秒前" : "\($0) 秒前" } ?? "时间无效"
+            let pfAge = SystemClock.elapsedSeconds(since: snapshot.firewallVerifiedUptime, now: SystemClock.seconds)
+                .map { $0 == 0 ? "不到 1 秒前" : "\($0) 秒前" } ?? "时间无效"
             let readyText = current ? (snapshot.readiness?.ready == true ? "就绪" : "未就绪") : "历史结果，待重新验证"
-            lines.append("-- 检查：\(readyText) · PF 校验：\(pfAge == 0 ? "不到 1 秒前" : "\(pfAge) 秒前")（发布于 \(formatter.string(from: snapshot.checkedAt))，\(age == 0 ? "不到 1 秒前" : "\(age) 秒前")）" + infoStyle)
+            lines.append("-- 检查：\(readyText) · PF 校验：\(pfAge)（发布于 \(formatter.string(from: snapshot.checkedAt))，\(age)）" + infoStyle)
             for route in snapshot.session?.routes ?? [] {
                 let rMark = current ? (route.ready ? "✓" : "✗") : "?"
                 lines.append("-- 分流\(current ? "规则" : "历史记录") [\(rMark)]：\(clean(route.url)) → \(clean(route.finalPolicy ?? "未知"))" + infoStyle)
@@ -129,8 +131,9 @@ enum SwiftBar {
                     if !identity.verified { lines.append("-- 身份原因：\(clean(identity.reason)) | color=#92400E,#FCD34D size=12") }
                 } else { lines.append("-- Surge 身份：待重新验证" + infoStyle) }
                 if let update = report.status.update, update.paused {
-                    let elapsed = max(0, Int(Date().timeIntervalSince(update.changedAt)))
-                    lines.append("-- 当前模式：\(report.status.state == "update_paused" ? "已暂停自动重开 Surge" : "请求暂停，等待确认")（已持续 \(elapsed / 60) 分 \(elapsed % 60) 秒） | color=#92400E,#FCD34D size=12")
+                    let elapsed = SystemClock.elapsedSeconds(since: update.changedAt.timeIntervalSince1970, now: Date().timeIntervalSince1970)
+                        .map { "\($0 / 60) 分 \($0 % 60) 秒" } ?? "时间无效"
+                    lines.append("-- 当前模式：\(report.status.state == "update_paused" ? "已暂停自动重开 Surge" : "请求暂停，等待确认")（已持续 \(elapsed)） | color=#92400E,#FCD34D size=12")
                     if report.status.state == "update_paused" {
                         lines.append("-- 说明：已确认暂停，可手动退出或升级 Surge；完成后点击「恢复自动重开」" + noteStyle)
                     } else {

@@ -56,7 +56,11 @@ ring files privately: a new capture run can reuse the first segment immediately.
 Uninstall removes the service/binary and retains private evidence. Neither action
 unlocks networking. The recorder child rejoins the supervisor's process group so
 launchd can reap it after a supervisor crash. Forced cleanup affects its own
-capture child only. The PF daemon is independent and is never force-restarted.
+capture child only. The supervisor publishes its own process-group ID before
+starting the child; stop waits for that group even if the child PID was never
+published. A replacement supervisor is checked again after lock release.
+Diagnostic lines are bounded and consumed with backpressure. The PF daemon is
+independent and is never force-restarted.
 
 ## What is retained
 
@@ -110,7 +114,8 @@ sudo /usr/sbin/tcpdump -n -q -tttt -k INPD \
 ```
 
 Coverage reports per-file earliest/latest **observed packet timestamps**, partial
-read errors and files that changed during reading. A range does not prove there
+read errors and files that changed during reading, including a ring filename
+replaced with another inode while the old descriptor remained readable. A range does not prove there
 are no gaps between its endpoints. A scan is bounded in size/time; malformed,
 truncated, oversized, unsafe or actively changing files cannot be reported as
 complete. Request/event logs can rotate before packet files: inspect both sources'

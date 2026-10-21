@@ -6,6 +6,19 @@ public enum DedicatedEgress {
     public static let launcher = "/Library/PrivilegedHelperTools/surge-guard-launch"
     public static let groupRecord = Paths.runtime + "/egress-group.json"
 
+    public static func availableGroup(record: [String: UInt32]?, occupied: (UInt32) -> Bool) throws -> UInt32 {
+        if let record {
+            guard record.count == 1, let gid = record["gid"], (60_000...60_999).contains(gid), !occupied(gid) else {
+                throw GuardError("Recorded dedicated group ID is invalid or occupied")
+            }
+            return gid
+        }
+        guard let gid = (UInt32(60_000)...UInt32(60_999)).first(where: { !occupied($0) }) else {
+            throw GuardError("No reserved group ID is available")
+        }
+        return gid
+    }
+
     public static func group() throws -> gid_t {
         try RootFiles.verify(launcher)
         var info = stat()

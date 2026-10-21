@@ -59,15 +59,17 @@ public enum RootFiles {
 
 public final class RuntimeLock {
     private let descriptor: Int32
-    public init(timeout: TimeInterval = 0, management: Bool = false) throws {
+    public convenience init(timeout: TimeInterval = 0, management: Bool = false) throws {
         try RootFiles.prepareRuntime()
-        descriptor = open(Paths.runtime + (management ? "/management.lock" : "/lock"), O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw GuardError("Cannot open service lock") }
-        do { try Self.acquire(descriptor, timeout: timeout) }
-        catch {
-            close(descriptor)
-            throw error
-        }
+        let fd = open(Paths.runtime + (management ? "/management.lock" : "/lock"), O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        try self.init(taking: fd, timeout: timeout)
+    }
+    // Takes ownership on both success and failure; deinit must not close a failed initializer's FD again.
+    public init(taking fd: Int32, timeout: TimeInterval = 0) throws {
+        guard fd >= 0 else { throw GuardError("Cannot open service lock") }
+        do { try Self.acquire(fd, timeout: timeout) }
+        catch { close(fd); throw error }
+        descriptor = fd
     }
     public static func acquire(_ descriptor: Int32, timeout: TimeInterval) throws {
         let deadline = SystemClock.seconds + max(0, timeout)
@@ -189,8 +191,8 @@ public final class Firewall {
         }
     }
 
-    public func rememberAddresses() {
-        knownAddresses.formUnion(Probe.addresses().filter { !$0.loopback }.map(\.address))
+    public func rememberAddresses() throws {
+        knownAddresses.formUnion(try Probe.addresses().filter { !$0.loopback }.map(\.address))
     }
 
     public func readRules() throws -> String {
@@ -204,7 +206,6 @@ public final class Firewall {
 
     @discardableResult
     public func block() throws -> (rulesLoadedUptime: Double, statesClearedUptime: Double) {
-        rememberAddresses()
         // Load fail-closed rules before slower integrity checks. If the anchor
         // was detached, ensureEnabled still rejects the transition.
         try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"],
@@ -216,11 +217,13 @@ public final class Firewall {
         guard actual.contains("surge-guard-block") else { throw GuardError("Block rule did not load") }
         // States precede PF rule evaluation. Terminate states involving this
         // Mac, including old interface addresses; never flush all PF state.
+        let currentAddresses = Set(try Probe.addresses().filter { !$0.loopback }.map(\.address))
+        knownAddresses.formUnion(currentAddresses)
         for address in knownAddresses.sorted() {
             try Command.checked("/sbin/pfctl", ["-k", address], timeout: 5)
             try Command.checked("/sbin/pfctl", ["-k", address.contains(":") ? "::/0" : "0.0.0.0/0", "-k", address], timeout: 5)
         }
-        knownAddresses = Set(Probe.addresses().filter { !$0.loopback }.map(\.address))
+        knownAddresses = currentAddresses
         expectedRules = actual
         let cleared = SystemClock.seconds
         if let blockID {

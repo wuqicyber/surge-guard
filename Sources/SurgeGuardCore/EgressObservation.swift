@@ -85,11 +85,11 @@ public struct EgressObservation: Codable {
 
     public static func collect() throws -> EgressObservation {
         let startedAt = Date(), startedUptime = SystemClock.seconds
-        let surgeInterface = Probe.addresses().first { $0.up && $0.address == "198.18.0.1" }?.name
+        let surgeInterface = try Probe.addresses().first { $0.up && $0.address == "198.18.0.1" }?.name
         // The first nettop frame is lifetime totals. Only the second delta frame is evidence of new activity.
         let output = try Command.checked("/usr/bin/nettop", ["-n", "-x", "-d", "-L", "2", "-s", "1",
                                          "-J", "interface,state,bytes_in,bytes_out"], timeout: 5)
-        guard surgeInterface == Probe.addresses().first(where: { $0.up && $0.address == "198.18.0.1" })?.name else {
+        guard surgeInterface == (try Probe.addresses()).first(where: { $0.up && $0.address == "198.18.0.1" })?.name else {
             throw GuardError("Surge interface changed during egress sampling; retry on the next sample")
         }
         var observation = try parse(output, surgeInterface: surgeInterface, surgePID: Probe.trustedSurgePID())

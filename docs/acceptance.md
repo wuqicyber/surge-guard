@@ -221,3 +221,23 @@ files remain available. `audit-start` must explicitly re-enable the job and
 produce fresh capture status. Record this intentional gap separately from a
 Surge request-history gap. A stopped recorder is not disabled protection, and
 neither a clean capture nor PF drop counters prove universal absence of bypass.
+
+
+## Crash and race follow-up acceptance
+
+Use a separate disposable session for these disruptive scenarios; the source
+regressions do not establish their live outcomes.
+
+- Change the Surge candidate set while Guard is allowed and while already blocked.
+  Verify signature and route results are invalidated, including a second candidate
+  appearing during signature validation. Reopening requires new route evidence.
+- Recover an orphaned Gate launch while a shutdown request is being submitted.
+  A changed launch observation must be re-read before consuming the request;
+  no stale request may run later, and an active launch still blocks shutdown.
+- Crash the audit supervisor after spawning but before publishing the child PID.
+  Stop/update must wait for its persisted process group, including a replacement
+  supervisor, before replacing files. Also exercise sustained stderr and verify
+  statistics arrive before EOF without an unbounded main-queue backlog.
+- Interrupt dedicated-group installation before and after directory-service
+  creation. Retry must retain the recorded reserved GID and refuse a collision;
+  do not assign a new GID merely to bypass a failed prior installation.

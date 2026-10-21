@@ -167,6 +167,7 @@ In a local Terminal, `sudo /Library/PrivilegedHelperTools/surge-guard unlock`
 stops the system service and removes only this gate. Keep the command available
 offline before applying a new policy. The user service cannot unlock PF.
 
-If the binary is absent, follow README's two-command emergency procedure.
+If the binary is absent, use README's independent recovery helper; do not clear
+the anchor immediately after bootout without confirming process exit.
 Retained policy/session data is separate from public source; do not restore an
 old complete `pf.conf` over subsequent edits made by other services.

@@ -107,9 +107,7 @@ enum PacketAuditAdmin {
 
     static func loaded() throws -> Bool {
         let query = try Command.run("/bin/launchctl", ["print", "system/" + PacketAudit.label])
-        if query.status == 0 { return true }
-        _ = try StatusReport.serviceRunning(query)
-        return false
+        return try StatusReport.serviceLoaded(query)
     }
 
     static func waitForExit() throws {
@@ -123,13 +121,29 @@ enum PacketAuditAdmin {
     static func stop() throws {
         try PacketAudit.prepare()
         var capturePID: Int32?
-        if (try? RootFiles.verify(PacketAudit.snapshot)) != nil,
-           let data = try? Data(contentsOf: URL(fileURLWithPath: PacketAudit.snapshot)),
-           let status = try? JSON.decode(PacketAuditSnapshot.self, from: data), status.bootId == SystemClock.bootID,
-           let pid = status.capturePid, pid > 1 { capturePID = pid }
+        var captureGroups = Set<Int32>()
+        func rememberCapture() {
+            if (try? RootFiles.verify(PacketAudit.snapshot)) != nil,
+               let data = try? Data(contentsOf: URL(fileURLWithPath: PacketAudit.snapshot)),
+               let status = try? JSON.decode(PacketAuditSnapshot.self, from: data), status.bootId == SystemClock.bootID {
+                if let pid = status.capturePid, pid > 1 { capturePID = pid }
+                if let group = status.processGroup, group > 1, group == status.pid { captureGroups.insert(group) }
+            }
+        }
+        rememberCapture()
+        let service = try Command.run("/bin/launchctl", ["print", "system/" + PacketAudit.label])
+        if let pid = try StatusReport.servicePID(service) {
+            let group = getpgid(pid)
+            guard group == pid || (group == -1 && errno == ESRCH) else { throw GuardError("Unexpected capture supervisor process group") }
+            captureGroups.insert(pid)
+        }
         if try loaded() { try Command.checked("/bin/launchctl", ["bootout", "system/" + PacketAudit.label], timeout: 15) }
         try waitForExit()
-        if let pid = capturePID {
+        guard try !loaded() else { throw GuardError("Packet audit service is still loaded") }
+        // A replacement supervisor may have published between our first query and bootout.
+        rememberCapture()
+        for group in captureGroups { try PacketAudit.waitForProcessGroupExit(group) }
+        if captureGroups.isEmpty, let pid = capturePID {
             let deadline = SystemClock.seconds + 20
             while true {
                 if kill(pid, 0) != 0 {

@@ -19,9 +19,7 @@ enum Admin {
 
     static func loaded() throws -> Bool {
         let result = try Command.run("/bin/launchctl", ["print", "system/" + Paths.label])
-        if result.status == 0 { return true }
-        _ = try StatusReport.serviceRunning(result)
-        return false
+        return try StatusReport.serviceLoaded(result)
     }
 
     static func prepareDedicatedGroup() throws {
@@ -36,14 +34,17 @@ enum Admin {
                 throw GuardError("Existing dedicated group does not match the protected installation record")
             }
         } else {
-            guard !FileManager.default.fileExists(atPath: DedicatedEgress.groupRecord),
-                  let unused = (UInt32(60_000)...UInt32(60_999)).first(where: { getgrgid($0) == nil }) else {
-                throw GuardError("Dedicated group is missing or no reserved group ID is available")
-            }
-            try Command.checked("/usr/sbin/dseditgroup", ["-o", "create", "-i", String(unused),
-                                                         "-r", "Surge Guard dedicated TCP egress", DedicatedEgress.groupName], timeout: 10)
-            gid = unused
+            var record: [String: UInt32]?
+            var info = stat()
+            if lstat(DedicatedEgress.groupRecord, &info) == 0 {
+                try RootFiles.verify(DedicatedEgress.groupRecord)
+                record = try JSON.decode([String: UInt32].self, from: Data(contentsOf: URL(fileURLWithPath: DedicatedEgress.groupRecord)))
+            } else if errno != ENOENT { throw GuardError("Cannot inspect dedicated group record") }
+            gid = try DedicatedEgress.availableGroup(record: record, occupied: { getgrgid($0) != nil })
+            // Reserve the identity before directory-service mutation so interrupted installation can retry.
             try RootFiles.write(try JSON.encode(["gid": gid]), to: DedicatedEgress.groupRecord)
+            try Command.checked("/usr/sbin/dseditgroup", ["-o", "create", "-i", String(gid),
+                                                         "-r", "Surge Guard dedicated TCP egress", DedicatedEgress.groupName], timeout: 10)
         }
         guard chown(DedicatedEgress.launcher, 0, gid) == 0, chmod(DedicatedEgress.launcher, 0o2755) == 0 else {
             throw GuardError("Cannot set dedicated launcher group/permissions")
@@ -141,7 +142,8 @@ enum Admin {
         if try loaded() { try Command.checked("/bin/launchctl", ["bootout", "system/" + Paths.label], timeout: 15) }
         // bootout can return before TERM cleanup releases the daemon's flock.
         let lock = try RuntimeLock(timeout: 20)
-        withExtendedLifetime(lock) {}
+        defer { withExtendedLifetime(lock) {} }
+        guard try !loaded() else { throw GuardError("Surge Guard service is still loaded") }
     }
 
     static func waitForStatus(expectAllowed: Bool = false, previousPID: Int32? = nil) throws {
@@ -215,6 +217,7 @@ enum Admin {
         // Serialize with the daemon's final block operation before flushing.
         let lock = try RuntimeLock(timeout: 20)
         defer { withExtendedLifetime(lock) {} }
+        guard try !loaded() else { throw GuardError("Surge Guard service is still loaded; refusing to clear its anchor") }
         try Firewall().unlock()
         try? FileManager.default.removeItem(atPath: Paths.snapshot)
         try RootFiles.preparePublicState()

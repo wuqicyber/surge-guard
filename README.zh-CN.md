@@ -93,7 +93,8 @@ Gate 重启后，确认应用启动即可结束等待；已记录的启动器退
 ```
 
 将 `REQUEST_UUID` 换成新鲜状态中的 `pending_launch.id`。该命令依赖你的明确确认，只清除
-对应的孤立请求，不会取消 LaunchServices 操作，也不会解除已有更新暂停。无法确认时须继续
+对应的孤立请求，不会取消 LaunchServices 操作，也不会解除已有更新暂停。恢复与关机消费共用
+请求锁；若取得锁时启动记录已经变化，会重新观察后再处理关机请求。无法确认时须继续
 等待或重启电脑，使旧 boot 请求失效；超时和手工删除标记都不代表启动已取消。
 有序关机会明确拒绝未决启动；已经排队的关机请求也会被消费并拒绝，不要求应用退出，避免
 以后恢复启动时意外执行旧关机请求。若服务启动失败且请求尚未消费，则按 nonce 撤回，允许
@@ -152,7 +153,7 @@ scripts/check.sh
 .build/release/surge-guard status --json
 ```
 
-构建会产生两个程序。未安装新版守护时，`status` 显示未知是合理结果。
+构建会产生 Guard、Gate 和专用组启动器。未安装新版守护时，`status` 显示未知是合理结果。
 检查脚本不加载防火墙、不退出应用，也不安装任何服务。
 
 ## 配置联网条件
@@ -261,6 +262,17 @@ sudo /Library/PrivilegedHelperTools/surge-guard backup
 sudo /Library/PrivilegedHelperTools/surge-guard rollback
 sudo /Library/PrivilegedHelperTools/surge-guard restore-policy
 ```
+
+若系统程序不可用，在本地终端以普通用户运行独立恢复入口：
+
+```sh
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-action" unlock
+# 已安装入口缺失时，可使用经过审查的仓库副本：
+# /bin/bash integrations/swiftbar/surge-guard-action.sh unlock
+```
+
+该脚本验证服务状态与 PID，等待旧进程退出并再次确认服务已卸载，再清空自身 anchor。
+不能把 `bootout` 返回视为进程退出；查询失败时会中止，不执行清空规则。
 
 系统备份位于 `/private/var/db/surge-guard/backups/<id>`，仅 root 可读。
 升级／手工备份与规则变更前的备份分开保存，保留历史，不整份覆盖其他服务修改过的 `pf.conf`。

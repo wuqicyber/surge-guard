@@ -23,17 +23,25 @@ case "$action" in
 esac
 
 service_snapshot() {
-    local service_text query_status pid
+    local service_text query_status pid service_state
     if service_text=$(sudo -n /bin/launchctl print "system/$label" 2>&1); then
+        service_state=$(printf '%s\n' "$service_text" | /usr/bin/awk '/^[[:space:]]*state =/ {count++; sub(/^[[:space:]]*state = ?/, ""); state=$0} END {if (count != 1 || state == "") exit 1; print state}') || {
+            printf '%s\n' 'Cannot confirm the guard service state; refusing recovery.' >&2
+            return 1
+        }
         pid=$(printf '%s\n' "$service_text" | /usr/bin/awk '/^[[:space:]]*pid =/ {print $3}')
         case "$pid" in
             '')
-                if [[ "$service_text" = *'state = running'* ]]; then
+                if [ "$service_state" = running ]; then
                     printf '%s\n' 'Cannot confirm the running guard PID; refusing recovery.' >&2
                     return 1
                 fi ;;
-            *[!0-9]*|0) printf '%s\n' 'Invalid guard PID; refusing recovery.' >&2; return 1 ;;
+            *[!0-9]*|0|1) printf '%s\n' 'Invalid guard PID; refusing recovery.' >&2; return 1 ;;
         esac
+        if [ -n "$pid" ] && ! /usr/bin/awk -v pid="$pid" 'BEGIN {exit !(pid > 1 && pid <= 2147483647)}'; then
+            printf '%s\n' 'Guard PID is outside the native range; refusing recovery.' >&2
+            return 1
+        fi
         printf 'loaded %s\n' "$pid"
     else
         query_status=$?

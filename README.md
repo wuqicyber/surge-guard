@@ -372,7 +372,9 @@ failed or was cancelled, run as the normal user:
 "$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" recover-launch REQUEST_UUID --confirm-settled
 ```
 
-Use the exact `pending_launch.id` from fresh status. This explicit attestation
+Use the exact `pending_launch.id` from fresh status. Recovery and shutdown
+consumption share the request lock; Gate retries a changed launch observation
+before consuming a queued request. This explicit attestation
 clears only that orphaned request; it does not cancel LaunchServices work or clear
 an existing update pause. If completion cannot be established, keep waiting or
 reboot to invalidate the previous boot's request. A timeout or manual deletion
@@ -391,7 +393,8 @@ retry no earlier than 30 seconds; waiting for verified blocking does not consume
 that cooldown. Each repair sends one normal quit request and never force-kills.
 The LaunchAgent uses `ProcessType=Interactive`; Foundation's child process group
 keeps Surge separate from Gate's group. Reinstall the user service to load the
-plist change. A second candidate Surge process invalidates cached trust; PID
+plist change. A change in Surge candidates invalidates cached signature and routing results,
+even while blocked; candidates are rechecked after signature validation. PID
 reuse is distinguished by its native start time.
 
 ### Application configuration
@@ -641,16 +644,20 @@ Remove the installed SwiftBar plugin, or the one invocation in your combined men
 Configuration, sessions, logs and the original PF backup are retained for recovery.
 Only the managed PF block is removed; unrelated PF content is preserved.
 
-If the binary is unavailable, in a local Terminal run:
+If the binary is unavailable, run the independently installed recovery helper
+as your normal user in a local Terminal:
 
 ```sh
-sudo launchctl bootout system/io.github.surge-guard
-sudo pfctl -a io.github.surge-guard -F rules
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-action" unlock
+# If the installed helper is missing, use the reviewed repository copy:
+# /bin/bash integrations/swiftbar/surge-guard-action.sh unlock
 ```
 
-If the first command says the service is absent, continue; resolve other failures
-before flushing so a live daemon cannot reapply its rules. Never globally disable
-PF or flush another service's rules to recover this utility.
+It authenticates only fixed system commands, validates the service state/PID,
+waits for the old process to exit, confirms the job is absent, then clears only
+this anchor and verifies it is empty. `bootout` returning alone does not establish
+process exit. Query failures abort recovery. Never globally disable PF or flush
+another service's rules to recover this utility.
 
 ## Limits
 
