@@ -237,12 +237,24 @@ public final class Firewall {
         return (rulesLoaded, cleared)
     }
 
-    public func allow() throws {
+    public func allow(group: UInt32? = nil, interface: String? = nil) throws {
         try ensureEnabled()
-        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"], timeout: 5)
+        if let group {
+            guard let interface else { throw GuardError("Persistent TCP policy needs a verified Surge interface") }
+            let rules = try Policy.persistentTCP(group: group, interface: interface)
+            try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"], input: rules, timeout: 5)
+        } else {
+            try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"], timeout: 5)
+        }
         revision += 1
         let actual = try readRules()
-        guard actual.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        if group != nil {
+            guard actual.contains("surge-guard-tcp-block"),
+                  actual.contains("surge-guard-egress"), actual.contains("surge-guard-vif"),
+                  actual.contains("if-bound") else {
+                throw GuardError("Persistent TCP rules were not verified")
+            }
+        } else if !actual.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw GuardError("Surge Guard rules were not cleared")
         }
         expectedRules = actual

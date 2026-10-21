@@ -38,6 +38,30 @@ do {
     var resetStats = completedStats!; resetStats.receivedByFilter = 0
     try check(completedStats!.follows(completedStats!) && !resetStats.follows(completedStats!), "Counter reset or wrap was silently treated as continuous statistics")
     try check(packetStats.consume("4 packets dropped by kernel") == nil, "Statistics reused an old capture baseline")
+    let liveStats = packetStats.consume("tcpdump: 349 packets captured, 366 packets received by filter, 0 packets dropped by kernel")
+    try check(liveStats?.captured == 349 && liveStats?.receivedByFilter == 366 && liveStats?.droppedByKernel == 0,
+              "macOS single-line live statistics were not recognized")
+    try check(packetStats.consume("tcpdump: 20 packets captured, 25 packets received by filter, 3 packets dropped by kernel") == completedStats,
+              "Single-line statistics lost capture drops")
+    let singularStats = packetStats.consume("tcpdump: 1 packet captured, 1 packet received by filter, 1 packet dropped by kernel")
+    try check(singularStats?.captured == 1 && singularStats?.receivedByFilter == 1 && singularStats?.droppedByKernel == 1,
+              "Singular live statistics were rejected")
+    for malformed in [
+        "tcpdump: 20 packets captured, 25 packets received by filter",
+        "tcpdump: 25 packets received by filter, 20 packets captured, 0 packets dropped by kernel",
+        "tcpdump: 20 packets captured, invalid packets received by filter, 0 packets dropped by kernel",
+        "tcpdump: 20 packets captured, 25 packets received by filter, 0 packets dropped by kernel,",
+        "tcpdump: 20 packets captured,, 0 packets dropped by kernel"
+    ] {
+        _ = packetStats.consume("99 packets captured")
+        _ = packetStats.consume("99 packets received by filter")
+        try check(packetStats.consume(malformed) == nil && packetStats.consume("0 packets dropped by kernel") == nil,
+                  "Malformed live statistics reused or left a partial baseline")
+    }
+    _ = packetStats.consume("20 packets captured")
+    _ = packetStats.consume("25 packets received by filter")
+    try check(packetStats.consume("3 packets dropped by kernel") == completedStats,
+              "Live statistics parsing broke final multiline statistics")
     var auditState = PacketAuditSnapshot(capacityMegabytes: 256)
     auditState.bootId = "boot-a"; auditState.checkedUptime = 10
     try check(auditState.fresh(boot: "boot-a", now: 11) && !auditState.fresh(boot: "boot-b", now: 11) &&
@@ -201,6 +225,19 @@ do {
     let egressLine = String(decoding: try JSONSerialization.data(withJSONObject: egressRecord), as: UTF8.self)
     try check(LogReader.format(egressLine).contains("系统扩展") && LogReader.format(egressLine).contains("200 字节") &&
               LogReader.format(egressLine).contains("en0"), "Readable egress log lost classification or evidence")
+    let dnsFixture = Data("{\"dnsCache\":[{\"domain\":\"example.com\",\"data\":[\"1.1.1.1\",\"1.0.0.1\"]},{\"domain\":\"cdn.example.com\",\"data\":[\"1.1.1.1\"]}],\"local\":[{\"domain\":\"router.local\",\"data\":\"192.168.1.1\"}]}".utf8)
+    let vipFixture = Data("{\"items\":[{\"domain\":\"vip.example.com\",\"IP\":\"198.18.0.10\"}]}".utf8)
+    let domainMap = EgressObservation.parseSurgeDomains(dnsData: dnsFixture, vipData: vipFixture)
+    try check(domainMap["1.1.1.1"] == ["cdn.example.com", "example.com"] &&
+              domainMap["192.168.1.1"] == ["router.local"] &&
+              domainMap["198.18.0.10"] == ["vip.example.com"],
+              "Surge DNS cache / virtual IP domain lookup failed")
+    var domainFlow = (egressDetails["flows"] as! [[String: Any]])[0]
+    domainFlow["candidate_domains"] = ["cdn.example.com", "example.com"]
+    let domainEvent = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "egress_path_observed", "details": ["flows": [domainFlow]]]), as: UTF8.self)
+    try check(LogReader.format(domainEvent).contains("Surge DNS 缓存候选域名：cdn.example.com, example.com") &&
+              LogReader.format(domainEvent).contains("不代表已确认该连接请求的域名"),
+              "Readable egress log omitted or overstated Surge DNS candidate domains")
     try check(LogReader.format(egressLine, json: true).contains("remote_endpoint"), "Machine egress log lost endpoint evidence")
     let discoveryDelta = egressHeader + "Discovery Service.402,,,0,0,\n" +
         "udp6 *.5353<->*.*,awdl0,,45,0,\n" +
@@ -357,6 +394,10 @@ do {
     print("PASS: user installer accepts existing bin directories and rejects files/symlinks")
     let backup = try BackupManifest(kind: "update")
     try JSON.decode(BackupManifest.self, from: Data(JSON.encode(backup).utf8)).validate()
+    let launcherBackup = try BackupManifest(kind: "update", includesLauncher: true)
+    try JSON.decode(BackupManifest.self, from: Data(JSON.encode(launcherBackup).utf8)).validate()
+    try check(launcherBackup.version == 2 && launcherBackup.files.last == "surge-guard-launch", "Dedicated launcher was omitted from update recovery")
+    try rejects { _ = try BackupManifest(kind: "policy", includesLauncher: true) }
     var invalidBackup = try JSONSerialization.jsonObject(with: Data(JSON.encode(backup).utf8)) as! [String: Any]
     for (field, value) in [("id", "../outside" as Any), ("kind", "unknown" as Any), ("files", ["/etc/pf.conf"] as Any)] {
         var modified = invalidBackup; modified[field] = value
@@ -414,6 +455,10 @@ do {
         script = script.replacingOccurrences(of: "$(id -u)", with: "$('\(directory)/id' -u)")
         let rendererPath = directory + "/renderer"
         script = script.replacingOccurrences(of: "renderer=\"$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-ui\"", with: "renderer='\(rendererPath)'")
+        let gatePath = directory + "/gate"
+        script = script.replacingOccurrences(of: "gate_bin=\"$HOME/Library/Application Support/SurgeGuard/bin/surge-gate\"", with: "gate_bin='\(gatePath)'")
+        try "#!/bin/sh\nprintf 'gate %s\\n' \"$*\" >> '\(directory)/calls'\n".write(toFile: gatePath, atomically: true, encoding: .utf8)
+        chmod(gatePath, 0o700)
         let rendererScript = "#!/bin/sh\nprintf 'renderer %s\\n' \"$*\" >> '\(directory)/calls'\nprintf 'rendered: '\n/bin/cat\n"
         try rendererScript.write(toFile: rendererPath, atomically: true, encoding: .utf8); chmod(rendererPath, 0o700)
         for tool in ["guard", "sudo", "launchctl", "kill", "sleep", "pfctl", "tail", "id"] {
@@ -463,6 +508,14 @@ do {
         try check(logBridge.status == 0 && logBridge.output.contains("rendered: {") && logCalls.contains("renderer format-logs"), "System log reader bypassed the user formatter")
         try check(logCalls.contains("sudo \(directory)/tail -n 200 /private/var/db/surge-guard/events.log") && !logCalls.contains("sudo \(rendererPath)"), "User formatter was invoked with sudo")
         try check(!logCalls.contains("guard --help"), "Independent log access queried the potentially broken guard executable")
+        for action in ["update-pause", "update-resume", "start", "stop"] {
+            try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+            let updateBridge = try Command.run("/bin/bash", [testScript, "gate-" + action], timeout: 10)
+            let updateCalls = try String(contentsOfFile: directory + "/calls")
+            try check(updateBridge.status == 0 && updateCalls.contains("gate " + action) &&
+                      !updateCalls.contains("sudo") && !updateCalls.contains("guard ") && !updateCalls.contains("pfctl"),
+                      "Gate update action touched privileged firewall recovery")
+        }
         for (action, file) in [("audit-logs", "events.log"), ("audit-requests", "requests.log")] {
             try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
             let auditBridge = try Command.run("/bin/bash", [testScript, action], timeout: 10)
@@ -526,6 +579,73 @@ do {
     }
     try rejects { _ = try Configuration.decode(Data("{\"version\":1,\"mode\":\"enhanced\",\"route_checks\":[],\"typo\":true}".utf8)) }
     print("PASS: policy validation, credentials, duplicate checks and unknown fields")
+
+    let persistent = Configuration(version: 1, mode: "routes", routeChecks: [routeCheck], persistentTCP: true)
+    let persistentJSON = try JSON.encode(persistent)
+    let persistentDecoded = try Configuration.decode(Data(persistentJSON.utf8))
+    try check(persistentJSON.contains("\"persistent_tcp\":true") && persistentDecoded.usesPersistentTCP && persistentDecoded == persistent,
+              "Persistent TCP flag was silently dropped by snake-case decoding")
+    try check(!roundTrip.usesPersistentTCP && !JSON.encode(routeConfig).contains("persistent"), "Legacy policy changed behavior/encoding")
+    try check(try persistent.fingerprint() != routeConfig.fingerprint(), "Enforcement change reused the old probe fingerprint")
+    for value in ["null", "0", "1", "\"true\"", "[]", "{}"] {
+        try rejects { _ = try Configuration.decode(Data("{\"version\":1,\"mode\":\"enhanced\",\"route_checks\":[],\"persistent_tcp\":\(value)}".utf8)) }
+    }
+    let tcpRules = try Policy.persistentTCP(group: 60000, interface: "utun42")
+    try check(tcpRules.contains("from 198.18.0.1") && tcpRules.contains("group 60000") &&
+              tcpRules.components(separatedBy: "keep state (if-bound)").count == 3 &&
+              tcpRules.contains("block drop quick on ! lo0 proto tcp all") &&
+              !tcpRules.contains("udp") &&
+              !tcpRules.contains("user ") && !tcpRules.contains("utun*"),
+              "Persistent policy changed TCP-only scope or widened identity/interface permissions")
+    for interface in ["", "en0", "utun", "utun1\npass all", "utun１２", "utun0000000000000000"] {
+        try rejects { _ = try Policy.persistentTCP(group: 60000, interface: interface) }
+    }
+    for group: UInt32 in [0, 20, 59999, 61000, UInt32.max] {
+        try rejects { _ = try Policy.persistentTCP(group: group, interface: "utun42") }
+    }
+    var processInfo = kinfo_proc()
+    processInfo.kp_eproc.e_ucred.cr_uid = 501
+    processInfo.kp_eproc.e_pcred.p_ruid = 501
+    processInfo.kp_eproc.e_ucred.cr_groups.0 = 60000
+    processInfo.kp_eproc.e_pcred.p_rgid = 60000
+    let infoSize = MemoryLayout<kinfo_proc>.size
+    try check(DedicatedEgress.identityMatches(processInfo, returnedSize: infoSize, uid: 501, group: 60000), "Correct native identity rejected")
+    for size in [0, infoSize - 1, infoSize + 1] {
+        try check(!DedicatedEgress.identityMatches(processInfo, returnedSize: size, uid: 501, group: 60000), "Absent/truncated native identity accepted")
+    }
+    for field in 0..<4 {
+        var wrong = processInfo
+        switch field {
+        case 0: wrong.kp_eproc.e_ucred.cr_uid = 502
+        case 1: wrong.kp_eproc.e_pcred.p_ruid = 502
+        case 2: wrong.kp_eproc.e_ucred.cr_groups.0 = 20
+        default: wrong.kp_eproc.e_pcred.p_rgid = 20
+        }
+        try check(!DedicatedEgress.identityMatches(wrong, returnedSize: infoSize, uid: 501, group: 60000), "Native identity field mismatch accepted")
+    }
+    try check(!DedicatedEgress.identityMatches(processInfo, returnedSize: infoSize, uid: 501, group: 20), "Ordinary group accepted")
+    try check(!DedicatedEgress.identityMatches(processInfo, returnedSize: infoSize, uid: 0, group: 60000), "Root identity accepted")
+    try check(!(try DedicatedEgress.identityMatches(pid: getpid(), uid: max(501, getuid()), group: 60000)), "Ordinary test process matched dedicated egress group")
+    try check((try? DedicatedEgress.identityMatches(pid: Int32.max, uid: 501, group: 60000)) != true, "Missing process was trusted")
+    print("PASS: persistent TCP opt-in, legacy encoding, interface-bound rules and strict egress identity")
+
+    let processA = SurgeProcess(pid: 100, startedSeconds: 1, startedMicroseconds: 1)
+    let processB = SurgeProcess(pid: 101, startedSeconds: 2, startedMicroseconds: 2)
+    var processTrust = SurgeProcessTrust()
+    var signatureQueries = 0
+    func signature(_ pid: pid_t) -> Bool { signatureQueries += 1; return pid == 100 }
+    try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100, "Single valid process rejected")
+    try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100 && signatureQueries == 1, "Unchanged process signature was not cached")
+    try check(try processTrust.trustedPID(candidates: [processA, processB], validate: signature) == nil, "Second process did not invalidate cached trust")
+    try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100 && signatureQueries == 2, "Returning to a single process reused invalidated trust")
+    let reusedPID = SurgeProcess(pid: 100, startedSeconds: 3, startedMicroseconds: 1)
+    try check(try processTrust.trustedPID(candidates: [reusedPID], validate: { _ in false }) == nil, "PID reuse bypassed signature validation")
+    try check(try processTrust.trustedPID(candidates: [processB], validate: signature) == nil, "Invalid signature trusted")
+    try check(try processTrust.trustedPID(candidates: [], validate: signature) == nil, "Empty process inventory trusted")
+    try rejects { _ = try processTrust.trustedPID(candidates: [processA], validate: { _ in throw GuardError("fixture") }) }
+    try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100, "Failed signature query poisoned recovery")
+    _ = try Probe.surgeCandidates()
+    print("PASS: native process inventory and trust invalidation on second instance, disappearance and PID reuse")
 
     let explanation: [String: Any] = ["rule-policy": "Residential", "final": "Node A", "final-type": "Shadowsocks",
                                       "steps": [["group": "Residential", "selected": "Nested"], ["group": "Nested", "selected": "Node A"]]]
@@ -600,13 +720,63 @@ do {
         (false, true, "ready", [], true, false), (true, false, "ready", [], true, false),
         (true, true, "ready", [], false, false), (true, true, "ready", ["com.example.A"], true, false),
         (true, true, "waiting", [], true, false), (true, true, "restoring", [], true, false),
-        (true, true, "error", [], true, false), (true, true, "unknown", [], true, false), (true, true, "shutting_down", [], true, false)
+        (true, true, "error", [], true, false), (true, true, "unknown", [], true, false), (true, true, "shutting_down", [], true, false),
+        (true, true, "update_paused", [], true, false), (true, true, "waiting_identity", [], true, false),
+        (true, true, "recovery_failed", [], true, false)
     ] {
         let object: [String: Any] = ["running": running, "fresh": fresh, "status": ["state": state, "pending": pending]]
         let report = try JSON.decode(GateStatusReport.self, from: JSONSerialization.data(withJSONObject: object))
         try check(report.menuTitle(guardAllowed: allowed).contains("🟢") == green, "SurgeGate menu displayed false green")
     }
     print("PASS: companion green requires fresh running ready state, no pending apps and verified network permission")
+
+    let pause = GateUpdate(paused: true), resume = GateUpdate(paused: false)
+    let pauseData = Data(try JSON.encode(pause).utf8)
+    try check(try GateUpdate.decode(pauseData) == pause, "Update mode lost its durable identity")
+    try check(pause.acknowledged(by: pause, state: "update_paused", fresh: true), "Fresh matching pause was not acknowledged")
+    try check(!pause.acknowledged(by: pause, state: "ready", fresh: true) &&
+              !pause.acknowledged(by: pause, state: "update_paused", fresh: false) &&
+              !pause.acknowledged(by: GateUpdate(paused: true), state: "update_paused", fresh: true) &&
+              !resume.acknowledged(by: pause, state: "update_paused", fresh: true) &&
+              !resume.acknowledged(by: resume, state: "recovery_failed", fresh: true),
+              "Stale, different or unfinished update request acknowledged")
+    try check(resume.acknowledged(by: resume, state: "waiting", fresh: true), "Resume incorrectly required network permission")
+    for bad in ["{}", "{\"paused\":true}", String(repeating: " ", count: 4097),
+                String(decoding: pauseData, as: UTF8.self).replacingOccurrences(of: "\"version\":1", with: "\"version\":2")] {
+        try rejects { _ = try GateUpdate.decode(Data(bad.utf8)) }
+    }
+    let updateDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("surge-update-test-" + UUID().uuidString)
+    do {
+        try UserPaths.prepare(updateDirectory.path)
+        defer { try? FileManager.default.removeItem(at: updateDirectory) }
+        let path = updateDirectory.appendingPathComponent("update.json").path
+        try check(try GateUpdate.load(from: path) == nil, "Absent update file invented a pause")
+        try AtomicFile.write(try JSON.encode(pause), to: path, mode: 0o600)
+        try check(try GateUpdate.load(from: path) == pause && GateUpdate.load(from: path) == pause, "Pause was consumed or changed across readers/restarts")
+        chmod(path, 0o644)
+        try rejects { _ = try GateUpdate.load(from: path) }
+        try FileManager.default.removeItem(atPath: path)
+        try FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: "/dev/null")
+        try rejects { _ = try GateUpdate.load(from: path) }
+    }
+    var retry = GateRetry()
+    retry.succeeded(at: 1, launched: false)
+    try check(retry.canAttempt(at: 2) && retry.failure == nil, "Readiness waiting incurred a failure cooldown")
+    retry.succeeded(at: 10, launched: true)
+    retry.succeeded(at: 11, launched: false)
+    try check(!retry.canAttempt(at: 19.99) && retry.canAttempt(at: 20), "Subsequent tick erased the 10s post-launch grace window")
+    retry.failed("launch failed", at: 2)
+    try check(!retry.canAttempt(at: 31.99) && retry.canAttempt(at: 32) && retry.failure == "launch failed", "Actual failure did not retain bounded 30s backoff")
+    retry.succeeded(at: 5, launched: false)
+    try check(retry.failure == nil && retry.canAttempt(at: 5), "Manual recovery did not clear failure backoff")
+    print("PASS: persistent update pause, bounded private reads, fresh request acknowledgement and recovery retry backoff")
+
+    var auditMenu = PacketAuditSnapshot(capacityMegabytes: 256)
+    auditMenu.surgeHistoryHasGaps = true
+    try check(auditMenu.historyDescriptions == ["抓包历史：未记录到缺口", "Surge 请求历史：有缺口"], "Request gap misrepresented as packet capture gap")
+    auditMenu.captureHistoryHasGaps = true; auditMenu.surgeHistoryHasGaps = false
+    try check(auditMenu.historyDescriptions == ["抓包历史：有缺口", "Surge 请求历史：未记录到缺口"], "Capture gap misrepresented as request gap")
+    print("PASS: independent packet capture and Surge request history gap presentation")
 
     var gate = GateConfiguration.standard
     gate.startupApps = ["com.example.B", "com.example.A"]
@@ -749,6 +919,8 @@ do {
     let parser = try Command.run("/sbin/pfctl", ["-n", "-a", Policy.anchor, "-f", "-"], input: Policy.blocked)
     try check(parser.status == 0, "PF parser rejected policy: \(parser.combined)")
     print("PASS: native macOS PF parser")
+    _ = try Command.checked("/sbin/pfctl", ["-n", "-a", Policy.anchor, "-f", "-"], input: tcpRules)
+    print("PASS: native persistent TCP rule syntax (no live firewall mutation)")
 
     var started = Date()
     do {

@@ -39,7 +39,10 @@ enum PacketAuditAdmin {
         switch action {
         case "audit-install": try install(configuration!)
         case "audit-start": try start()
-        case "audit-stop": try stop(); print("Packet recording stopped for this boot. Subsequent traffic is not recorded; an installed recorder starts at next boot.")
+        case "audit-stop":
+            try Command.checked("/bin/launchctl", ["disable", "system/" + PacketAudit.label])
+            try stop()
+            print("Packet recording stopped and automatic startup disabled. Captures retained; audit-start re-enables recording. PF was not changed.")
         case "audit-uninstall":
             try stop()
             for path in [PacketAudit.plist, PacketAudit.binary] where FileManager.default.fileExists(atPath: path) {
@@ -143,6 +146,7 @@ enum PacketAuditAdmin {
         try RootFiles.verify(PacketAudit.binary)
         try RootFiles.verify(PacketAudit.plist)
         _ = try PacketAuditConfiguration.load()
+        try Command.checked("/bin/launchctl", ["enable", "system/" + PacketAudit.label])
         if try !loaded() { try Command.checked("/bin/launchctl", ["bootstrap", "system", PacketAudit.plist], timeout: 5) }
         let deadline = SystemClock.seconds + 20
         while SystemClock.seconds < deadline {

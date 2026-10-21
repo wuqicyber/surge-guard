@@ -49,8 +49,11 @@ sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-start
 sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-uninstall
 ```
 
-Stop unloads the recording job for this boot; installed RunAtLoad re-arms it next
-boot. Uninstall prevents that restart and retains private evidence. Neither action
+Stop disables automatic startup and unloads the recording job; it stays stopped
+across boots until `audit-start` (or an explicit audit installation) re-enables it.
+Before restarting recording during an investigation, preserve the relevant closed
+ring files privately: a new capture run can reuse the first segment immediately.
+Uninstall removes the service/binary and retains private evidence. Neither action
 unlocks networking. The recorder child rejoins the supervisor's process group so
 launchd can reap it after a supervisor crash. Forced cleanup affects its own
 capture child only. The PF daemon is independent and is never force-restarted.
@@ -113,11 +116,45 @@ truncated, oversized, unsafe or actively changing files cannot be reported as
 complete. Request/event logs can rotate before packet files: inspect both sources'
 retained timestamps. A preview is explicitly not a full traffic list.
 
+The generic libpcap range reader can reject a macOS pcap-ng file containing
+different link types across interfaces. If `audit-coverage` reports that error,
+its partial timestamps are not the file's full retained range. The system
+`tcpdump` command above can still decode those captures, including PKTAP metadata.
+
 Use the capture, request and guard time lines together. Keep unknown attribution
 unknown; lack of a matching request never suffices to call a packet bypass.
 The audit does not automatically block on data loss or unknown attribution.
 Strict fail-closed enforcement is a different system-filtering requirement and
 is not supplied by this external recorder.
+
+## Daily use and suspicious-only capture
+
+Continuous full-interface recording is not required for PF protection. Prefer it
+for bounded acceptance/debugging windows, then stop it; keep ordinary event logs
+and passive socket observations. Stopping loses retrospective packet evidence
+for later incidents, but does not weaken firewall rules.
+
+PKTAP metadata filters can select interface (`if`), direction (`dir`), process
+name/PID and effective process name/PID. For example, the system tcpdump metadata
+expression `dir=out and if=en and proc!=Surge` selects candidates on en-prefixed
+interfaces. It is not a bypass detector: names do not verify signatures or socket
+GIDs, attribution may be absent, PIDs change, additional physical/bridge interfaces
+need coverage, and a single physical packet does not encode its previous tunnel
+path. Retain unknown attribution; do not hide all process names equal to Surge
+when claiming trusted-process exclusion. The metadata filter has no GID keyword.
+
+PF rule logging, where the OS supports a usable pflog capture interface, records
+matches on rules with logging enabled. A block record is a prevented attempt,
+not a packet that escaped; it cannot reveal traffic that bypassed that rule.
+Syntax acceptance alone does not establish usable pflog capture on a particular
+Mac. This project has not enabled or validated pflog and does not alter PF for
+evidence collection.
+
+The existing recorder deliberately keeps its all-interface contract for tracing
+both sides of a transition. A future separate suspicious-egress recorder should
+retain only bounded physical outbound candidates with explicitly unverified
+attribution, validated interface coverage and drop statistics. It must not call
+them confirmed leaks or silently change the existing audit's coverage.
 
 Primary references: [Apple tcpdump manual](https://github.com/apple-oss-distributions/tcpdump/blob/main/tcpdump/tcpdump.1),
 [Recording a Packet Trace](https://developer.apple.com/documentation/network/recording-a-packet-trace),

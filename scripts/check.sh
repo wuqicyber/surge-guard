@@ -4,8 +4,17 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
 swift run surge-guard-tests
 swift build -c release -Xswiftc -warnings-as-errors
+if .build/release/surge-guard-launch --invalid; then
+    printf '%s\n' 'Dedicated launcher accepted arbitrary arguments' >&2
+    exit 1
+fi
+if .build/release/surge-guard-launch --check; then
+    printf '%s\n' 'Uninstalled launcher unexpectedly granted a dedicated group' >&2
+    exit 1
+fi
 .build/release/surge-guard validate examples/enhanced.json
 .build/release/surge-guard validate examples/routes.json
+.build/release/surge-guard validate examples/persistent-tcp.json
 .build/release/surge-guard --help
 .build/release/surge-guard install --help
 .build/release/surge-gate --help

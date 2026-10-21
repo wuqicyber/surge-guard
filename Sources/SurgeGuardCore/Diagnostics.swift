@@ -33,7 +33,8 @@ public struct GuardSnapshot: Codable {
     public var enforcement = "surge_readiness_gate"
 
     public init(runId: String, firewallVerifiedUptime: Double, allowed: Bool, configurationMode: String,
-                readiness: Readiness?, session: SessionObservation?, reasons: [String]) {
+                readiness: Readiness?, session: SessionObservation?, reasons: [String],
+                enforcement: String = "surge_readiness_gate") {
         bootId = SystemClock.bootID
         self.runId = runId
         pid = getpid()
@@ -45,6 +46,7 @@ public struct GuardSnapshot: Codable {
         self.readiness = readiness
         self.session = session
         self.reasons = reasons
+        self.enforcement = enforcement
     }
 
     public func fresh(boot: String = SystemClock.bootID, now: Double = SystemClock.seconds) -> Bool {

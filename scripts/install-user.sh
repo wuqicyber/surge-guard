@@ -23,9 +23,11 @@ chmod 700 "$user_dir" "$user_dir/bin"
 user_backup="$user_dir/backups/user-$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$user_backup"
 chmod 700 "$user_dir/backups" "$user_backup"
-for name in surge-guard-ui surge-guard-action surge-guard-menu; do
+for name in surge-guard-ui surge-guard-action surge-guard-menu surge-gate; do
     if [ -f "$user_dir/bin/$name" ]; then cp -p "$user_dir/bin/$name" "$user_backup/$name"; fi
 done
+gate_plist="$HOME/Library/LaunchAgents/io.github.surge-guard.gate.plist"
+if [ -f "$gate_plist" ]; then cp -p "$gate_plist" "$user_backup/gate.plist"; fi
 install -m 700 "$project_dir/.build/release/surge-guard" "$user_dir/bin/surge-guard-ui.new"
 mv -f "$user_dir/bin/surge-guard-ui.new" "$user_dir/bin/surge-guard-ui"
 install -m 700 "$project_dir/integrations/swiftbar/surge-guard-action.sh" "$user_dir/bin/surge-guard-action"
@@ -40,6 +42,7 @@ case "$("$guard_bin" --help 2>/dev/null || true)" in
     *) printf '%s\n' 'Recovery menu installed. Upgrade the system guard before installing the user companion.' >&2; exit 1 ;;
 esac
 "$project_dir/.build/release/surge-gate" install
+printf '%s\n' 'Existing system policy, rule draft and persistent update pause are retained. Apply policy changes explicitly with configure.'
 if [ "${1:-}" = --menu-only ]; then
     printf '%s\n' 'User service and menu renderer installed. Call the renderer with --section from your existing plugin.'
     exit 0

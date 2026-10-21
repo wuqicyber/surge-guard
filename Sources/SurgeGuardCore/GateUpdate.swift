@@ -1,0 +1,76 @@
+import Foundation
+import Darwin
+
+public struct GateUpdate: Codable, Equatable {
+    public let version: Int
+    public let id: UUID
+    public let paused: Bool
+    public let changedAt: Date
+    public let reason: String
+    public static var path: String { UserPaths.directory + "/update-mode.json" }
+
+    public init(paused: Bool) {
+        version = 1
+        id = UUID()
+        self.paused = paused
+        changedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        reason = paused ? "User requested Surge update; automatic startup, identity repair and app restoration paused" :
+            "User finished or cancelled Surge update; automatic recovery enabled"
+    }
+
+    public static func decode(_ data: Data) throws -> GateUpdate {
+        guard data.count <= 4096, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["version", "id", "paused", "changed_at", "reason"] else {
+            throw GuardError("Invalid update mode; automatic recovery remains paused")
+        }
+        let value = try JSON.decode(GateUpdate.self, from: data)
+        guard value.version == 1, value.changedAt.timeIntervalSince1970.isFinite,
+              !value.reason.isEmpty, value.reason.utf8.count <= 512,
+              !value.reason.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            throw GuardError("Invalid update mode; automatic recovery remains paused")
+        }
+        return value
+    }
+
+    public static func load(from path: String = path) throws -> GateUpdate? {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        if fd < 0, errno == ENOENT { return nil }
+        guard fd >= 0 else { throw GuardError("Cannot read update mode: errno \(errno); automatic recovery paused") }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? file.close() }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG,
+              info.st_mode & 0o077 == 0, info.st_size <= 4096 else {
+            throw GuardError("Unsafe update mode file; automatic recovery paused")
+        }
+        return try decode(file.read(upToCount: 4097) ?? Data())
+    }
+
+    public func acknowledged(by update: GateUpdate?, state: String, fresh: Bool) -> Bool {
+        fresh && update == self && (paused ? state == "update_paused" :
+            !["update_paused", "shutting_down", "error", "recovery_failed"].contains(state))
+    }
+}
+
+public struct GateRetry {
+    public private(set) var nextAttempt: Double = 0
+    public private(set) var failure: String?
+    public init() {}
+    public func canAttempt(at now: Double) -> Bool { now >= nextAttempt }
+    public mutating func failed(_ message: String, at now: Double) { failure = message; nextAttempt = now + 30 }
+    public mutating func succeeded(at now: Double, launched: Bool) {
+        let hadFailure = failure != nil
+        failure = nil
+        nextAttempt = launched ? now + 10 : (hadFailure ? now : max(nextAttempt, now))
+    }
+}
+
+public struct GateSurgeIdentity: Codable {
+    public var pid: Int32?
+    public var expectedGroup: UInt32?
+    public var verified = false
+    public var reason = "unverified"
+    public var checkedAt = Date()
+    public var checkedUptime = SystemClock.seconds
+    public init() {}
+}

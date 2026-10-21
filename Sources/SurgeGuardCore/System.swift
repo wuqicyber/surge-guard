@@ -178,26 +178,64 @@ public enum Probe {
     }
 
     public static func trustedSurgePID() throws -> pid_t? {
-        let result = try Command.run("/usr/bin/pgrep", ["-x", "Surge"])
-        guard result.status == 0 else { return nil }
+        let candidates = try surgeCandidates()
+        var trust = SurgeProcessTrust()
+        let pid = try trust.trustedPID(candidates: candidates, validate: surgeSignatureValid)
+        return try surgeCandidates() == candidates ? pid : nil
+    }
+
+    public static func surgeCandidates() throws -> [SurgeProcess] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
+        for _ in 0..<3 {
+            var size = 0
+            guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0, size <= 16 * 1024 * 1024 else {
+                throw GuardError("Cannot size native process inventory: errno \(errno)")
+            }
+            var records = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride + 64)
+            size = records.count * MemoryLayout<kinfo_proc>.stride
+            let result = records.withUnsafeMutableBytes { sysctl(&mib, 3, $0.baseAddress, &size, nil, 0) }
+            if result != 0, errno == ENOMEM { continue }
+            guard result == 0, size > 0, size % MemoryLayout<kinfo_proc>.stride == 0,
+                  size <= records.count * MemoryLayout<kinfo_proc>.stride else {
+                throw GuardError("Cannot read complete native process inventory: errno \(errno)")
+            }
+            return records.prefix(size / MemoryLayout<kinfo_proc>.stride).compactMap { info in
+                let name = withUnsafeBytes(of: info.kp_proc.p_comm) {
+                    String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self)
+                }
+                guard name == "Surge" else { return nil }
+                let started = info.kp_proc.p_un.__p_starttime
+                return SurgeProcess(pid: info.kp_proc.p_pid, startedSeconds: Int(started.tv_sec),
+                                    startedMicroseconds: Int(started.tv_usec))
+            }.sorted { $0.pid < $1.pid }
+        }
+        throw GuardError("Native process inventory changed repeatedly")
+    }
+
+    public static func surgeSignatureValid(_ pid: pid_t) -> Bool {
         var requirement: SecRequirement?
         let identity = "anchor apple generic and identifier \"com.nssurge.surge-mac\" and certificate leaf[subject.OU] = \"YCKFLA6N72\""
         guard SecRequirementCreateWithString(identity as CFString, SecCSFlags(rawValue: 0), &requirement) == errSecSuccess,
-              let requirement else { return nil }
-        for value in result.output.split(whereSeparator: { $0.isWhitespace }) {
-            guard let pid = Int32(value) else { continue }
-            var code: SecCode?
-            let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
-            if SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(rawValue: 0), &code) == errSecSuccess,
-               let code, SecCodeCheckValidity(code, SecCSFlags(rawValue: 0), requirement) == errSecSuccess {
-                return pid
-            }
-        }
-        return nil
+              let requirement else { return false }
+        var code: SecCode?
+        let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
+        return SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(rawValue: 0), &code) == errSecSuccess &&
+            code.map { SecCodeCheckValidity($0, SecCSFlags(rawValue: 0), requirement) == errSecSuccess } == true
     }
 
     public static func trustedSurgeRunning() throws -> Bool {
         try trustedSurgePID() != nil
+    }
+
+    public static func surgeInterface() throws -> String {
+        guard let store = SCDynamicStoreCreate(nil, "surge-guard.interface" as CFString, nil, nil),
+              let primary = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
+              let service = primary["PrimaryService"] as? String, isSurgeService(service, store: store),
+              let interface = primary["PrimaryInterface"] as? String,
+              addresses().contains(where: { $0.name == interface && $0.up && $0.address == "198.18.0.1" }) else {
+            throw GuardError("Verified Surge interface is unavailable")
+        }
+        return interface
     }
 
     public static func isSurgeService(_ service: String, store: SCDynamicStore) -> Bool {

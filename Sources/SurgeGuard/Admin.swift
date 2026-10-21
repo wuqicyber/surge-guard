@@ -18,7 +18,37 @@ enum Admin {
     """ }
 
     static func loaded() throws -> Bool {
-        try Command.run("/bin/launchctl", ["print", "system/" + Paths.label]).status == 0
+        let result = try Command.run("/bin/launchctl", ["print", "system/" + Paths.label])
+        if result.status == 0 { return true }
+        _ = try StatusReport.serviceRunning(result)
+        return false
+    }
+
+    static func prepareDedicatedGroup() throws {
+        try RootFiles.prepareRuntime()
+        try RootFiles.verify(DedicatedEgress.launcher)
+        let gid: gid_t
+        if let existing = getgrnam(DedicatedEgress.groupName) {
+            gid = existing.pointee.gr_gid
+            try RootFiles.verify(DedicatedEgress.groupRecord)
+            let record = try JSON.decode([String: UInt32].self, from: Data(contentsOf: URL(fileURLWithPath: DedicatedEgress.groupRecord)))
+            guard record == ["gid": gid], (60_000...60_999).contains(gid), existing.pointee.gr_mem.pointee == nil else {
+                throw GuardError("Existing dedicated group does not match the protected installation record")
+            }
+        } else {
+            guard !FileManager.default.fileExists(atPath: DedicatedEgress.groupRecord),
+                  let unused = (UInt32(60_000)...UInt32(60_999)).first(where: { getgrgid($0) == nil }) else {
+                throw GuardError("Dedicated group is missing or no reserved group ID is available")
+            }
+            try Command.checked("/usr/sbin/dseditgroup", ["-o", "create", "-i", String(unused),
+                                                         "-r", "Surge Guard dedicated TCP egress", DedicatedEgress.groupName], timeout: 10)
+            gid = unused
+            try RootFiles.write(try JSON.encode(["gid": gid]), to: DedicatedEgress.groupRecord)
+        }
+        guard chown(DedicatedEgress.launcher, 0, gid) == 0, chmod(DedicatedEgress.launcher, 0o2755) == 0 else {
+            throw GuardError("Cannot set dedicated launcher group/permissions")
+        }
+        _ = try DedicatedEgress.group()
     }
 
     static func install() throws {
@@ -39,6 +69,8 @@ enum Admin {
         // A signed/compiled source executable may be user-owned; it is copied
         // once into the protected system path. No root-executed user script.
         let source = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
+        let launcherSource = URL(fileURLWithPath: source).deletingLastPathComponent().appendingPathComponent("surge-guard-launch").path
+        guard FileManager.default.isExecutableFile(atPath: launcherSource) else { throw GuardError("Build surge-guard-launch before installing") }
         guard source != Paths.binary else { throw GuardError("Install using the freshly built binary, not the installed copy") }
         var existing = stat()
         if lstat(Paths.binary, &existing) == 0 { try RootFiles.verify(Paths.binary) }
@@ -56,6 +88,13 @@ enum Admin {
         let config = FileManager.default.fileExists(atPath: Paths.configuration) ? try Configuration.load() : .enhanced
         var expectAllowed = try Probe.readiness().ready
         if expectAllowed, config.mode == "routes" { expectAllowed = try Probe.privilegedSession(configuration: config, helperPath: stagedBinary).ready }
+        if expectAllowed, config.usesPersistentTCP {
+            expectAllowed = (try? DedicatedEgress.group()).flatMap { group in
+                (try? Probe.trustedSurgePID()).flatMap { pid in
+                    (try? DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: group))
+                }
+            } == true
+        }
         do {
             if upgrading { try stop() }
             do {
@@ -70,6 +109,12 @@ enum Admin {
                 let backup = Paths.pfConfig + ".surge-guard.backup"
                 if !FileManager.default.fileExists(atPath: backup) { try RootFiles.write(original, to: backup) }
                 guard rename(stagedBinary, Paths.binary) == 0 else { throw GuardError("Cannot atomically replace installed binary") }
+                let stagedLauncher = DedicatedEgress.launcher + ".new." + UUID().uuidString
+                defer { try? FileManager.default.removeItem(atPath: stagedLauncher) }
+                try Command.checked("/usr/bin/install", ["-o", "root", "-g", "wheel", "-m", "755", launcherSource, stagedLauncher])
+                if FileManager.default.fileExists(atPath: DedicatedEgress.launcher) { try RootFiles.verify(DedicatedEgress.launcher) }
+                guard rename(stagedLauncher, DedicatedEgress.launcher) == 0 else { throw GuardError("Cannot install Surge launcher") }
+                try prepareDedicatedGroup()
                 try RootFiles.write(updated, to: Paths.pfConfig, mode: 0o644)
                 try RootFiles.write(plist, to: Paths.plist, mode: 0o644)
                 if !FileManager.default.fileExists(atPath: Paths.configuration) {
@@ -154,7 +199,10 @@ enum Admin {
     }
 
     static func start() throws {
-        guard try !loaded() else { throw GuardError("Service is already loaded; use status") }
+        if try loaded() {
+            print("Service is already loaded. Verify with sudo \(Paths.binary) status")
+            return
+        }
         try RootFiles.verify(Paths.binary)
         try RootFiles.verify(Paths.plist)
         try RootFiles.verify(Policy.anchorPath)
@@ -187,9 +235,13 @@ enum Admin {
     }
 
     static func restart() throws {
-        guard try loaded() else { throw GuardError("Service is not loaded; use start") }
-        let previous = StatusReport.read().snapshot?.pid
         let expectAllowed = (try? CLI.check(["check"]).ready) == true
+        if try !loaded() {
+            try start()
+            try waitForStatus(expectAllowed: expectAllowed)
+            return
+        }
+        let previous = StatusReport.read().snapshot?.pid
         // launchd sends TERM, allowing the daemon to install block rules.
         try Command.checked("/bin/launchctl", ["kill", "SIGTERM", "system/" + Paths.label])
         EventLog.write("restart_requested", message: "Requested normal stop; launchd KeepAlive restarts the service")
@@ -206,7 +258,7 @@ enum Admin {
         try RootFiles.write(updated, to: Paths.pfConfig, mode: 0o644)
         // The now-empty live anchor is harmless until PF is next reloaded.
         // Avoid reloading the main ruleset just to remove this empty call.
-        for path in [Paths.plist, Policy.anchorPath, Paths.binary] {
+        for path in [Paths.plist, Policy.anchorPath, Paths.binary, DedicatedEgress.launcher] {
             if FileManager.default.fileExists(atPath: path) {
                 try RootFiles.verify(path)
                 try FileManager.default.removeItem(atPath: path)

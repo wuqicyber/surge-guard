@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "mode": "enhanced",
+  "route_checks": [],
+  "persistent_tcp": true
+}

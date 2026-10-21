@@ -147,6 +147,20 @@ public struct PacketCaptureStatistics {
     public init() {}
 
     public mutating func consume(_ line: String) -> PacketCaptureCounters? {
+        if line.hasPrefix("tcpdump: ") {
+            captured = nil; received = nil
+            defer { captured = nil; received = nil }
+            let fields = line.dropFirst("tcpdump: ".count).split(separator: ",", omittingEmptySubsequences: false)
+            guard fields.count == 3 else { return nil }
+            for field in fields.prefix(2) {
+                _ = consumeField(field.trimmingCharacters(in: .whitespaces))
+            }
+            return consumeField(fields[2].trimmingCharacters(in: .whitespaces))
+        }
+        return consumeField(line)
+    }
+
+    private mutating func consumeField(_ line: String) -> PacketCaptureCounters? {
         let parts = line.split(separator: " ", maxSplits: 1)
         guard parts.count == 2, let value = UInt64(parts[0]) else { return nil }
         switch String(parts[1]) {
@@ -195,6 +209,11 @@ public struct PacketAuditSnapshot: Codable {
     public var guardCheckedUptime: Double?
 
     public init(capacityMegabytes: Int) { self.capacityMegabytes = capacityMegabytes }
+
+    public var historyDescriptions: [String] {
+        ["抓包历史：\(captureHistoryHasGaps ? "有缺口" : "未记录到缺口")",
+         "Surge 请求历史：\(surgeHistoryHasGaps ? "有缺口" : "未记录到缺口")"]
+    }
 
     public func fresh(boot: String = SystemClock.bootID, now: Double = SystemClock.seconds) -> Bool {
         guard version == 1, !boot.isEmpty, bootId == boot, checkedUptime <= now, now - checkedUptime < 8 else { return false }

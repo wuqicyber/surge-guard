@@ -14,7 +14,7 @@ enum CLI {
       audit-request-sample             Normal-user read-only Surge request metadata snapshot (JSON)
       sudo audit-install [--megabytes 256|1024|4096] [--timezone AREA/CITY]
                                       Install/start independent bounded PKTAP recorder; no PF changes
-      sudo audit-start / audit-stop    Start/stop recording; boot re-arms an installed recorder
+      sudo audit-start / audit-stop    Enable recording / stop and disable automatic startup; retain captures
       sudo audit-preview               Limited metadata preview of retained captures
       sudo audit-coverage              Scan actual retained packet timestamps (JSON; may be partial)
       sudo audit-uninstall             Stop recorder/remove its service; retain private captures
@@ -35,7 +35,8 @@ enum CLI {
       sudo uninstall                  Remove installed system components; retain configuration/logs
 
     Enhanced mode preserves Surge routing and DIRECT policies. This is a reactive
-    readiness gate; it does not certify that every packet is forced through Surge.
+    readiness gate by default. Optional persistent_tcp keeps TCP egress rules loaded;
+    neither mode certifies complete packet coverage or boot-time protection.
     """
 
     struct CheckReport: Encodable {
@@ -76,6 +77,18 @@ enum CLI {
             } catch {
                 report.ready = false
                 report.reasons.append("rule_probe_failed: \(error)")
+            }
+        }
+        if configuration.usesPersistentTCP {
+            do {
+                let group = try DedicatedEgress.group()
+                guard let pid = try Probe.trustedSurgePID(),
+                      try DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: group) else {
+                    throw GuardError("surge_egress_identity_mismatch")
+                }
+            } catch {
+                report.ready = false
+                report.reasons.append("persistent_tcp_not_ready: \(error)")
             }
         }
         return report
@@ -142,7 +155,18 @@ enum CLI {
             else {
                 if report.flows.isEmpty { print("本次采样没有可展示的其他接口 socket 记录；覆盖缺口见下方。这不能确认历史或采样间隔内是否绕过。") }
                 else {
-                    let details = try JSONSerialization.jsonObject(with: Data(JSON.encode(report).utf8))
+                    var details = (try JSONSerialization.jsonObject(with: Data(JSON.encode(report).utf8)) as? [String: Any]) ?? [:]
+                    let domains = EgressObservation.surgeDomainMap()
+                    if !domains.isEmpty, var flows = details["flows"] as? [[String: Any]] {
+                        for index in flows.indices {
+                            if let remote = flows[index]["remote_endpoint"] as? String,
+                               let host = EgressObservation.endpointHost(remote),
+                               let matched = domains[host], !matched.isEmpty {
+                                flows[index]["candidate_domains"] = matched
+                            }
+                        }
+                        details["flows"] = flows
+                    }
                     let timestamp = ISO8601DateFormatter()
                     timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                     let event: [String: Any] = ["event": "egress_path_observed", "component": "SurgeGuard", "details": details,
@@ -202,6 +226,7 @@ enum CLI {
             case "configure":
                 guard args.count == 2 else { throw GuardError("Usage: sudo configure FILE") }
                 let config = try Configuration.decode(Data(contentsOf: URL(fileURLWithPath: args[1])))
+                if config.usesPersistentTCP { try Admin.prepareDedicatedGroup() }
                 try RootFiles.preparePublicState()
                 try Recovery.save(kind: "policy")
                 try RootFiles.write(try JSON.encode(config, pretty: true), to: Paths.configuration, mode: 0o644)

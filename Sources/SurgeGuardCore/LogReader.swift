@@ -19,7 +19,8 @@ public enum LogReader {
                       "surge_tunnel_disconnected": "增强模式已断开",
                       "surge_tunnel_connecting": "增强模式正在连接，保持阻断",
                       "surge_tunnel_status_unknown": "增强模式连接状态未知",
-                      "surge_process_exited": "Surge 进程已退出"]
+                      "surge_process_exited": "Surge 进程已退出",
+                      "persistent_tcp_not_ready": "常驻 TCP 出口条件未通过，保持阻断"]
         return message.components(separatedBy: "; ").map { part in
             guard let key = labels.keys.first(where: { part == $0 || part.hasPrefix($0 + ":") }) else { return text(part) }
             if key == "rule_probe_failed" {
@@ -75,6 +76,9 @@ public enum LogReader {
                       "gate_restore_progress": "正在恢复应用", "gate_waiting": "等待系统门禁放行",
                       "gate_status_unavailable": "系统门禁状态暂不可读", "gate_status_recovered": "系统门禁状态读取已恢复",
                       "gate_error": "应用门禁异常", "readiness_loss_blocked": "接管失效，优先阻断已验证",
+                      "update_paused": "Surge 更新暂停：自动启动、身份修复和应用恢复已暂停",
+                      "update_resumed": "Surge 更新模式结束：自动恢复已启用",
+                      "surge_recovery_failed": "Surge 恢复失败：30 秒后重试",
                       "egress_path_observed": "socket 采样记录（实际路径未验证）",
                       "egress_observation_failed": "出口观测暂不可用", "egress_observation_recovered": "出口观测已恢复",
                       "egress_observation_summary": "出口观测摘要",
@@ -194,6 +198,9 @@ public enum LogReader {
                 lines.append("    分类：\(assessments[category]!)")
                 lines.append("    nettop 报告接口：\(text(flow["interface"]))  协议：\(text(flow["transport"]))")
                 lines.append("    本地端点：\(text(flow["local_endpoint"]))  远端原始值：\(text(flow["remote_endpoint"]))")
+                if let domains = flow["candidate_domains"] as? [String], !domains.isEmpty {
+                    lines.append("    Surge DNS 缓存候选域名：\(domains.map { text($0) }.joined(separator: ", "))（仅按远端 IP 关联缓存，不代表已确认该连接请求的域名）")
+                }
                 lines.append("    本次采样发送：\(text(flow["sent_bytes"])) 字节  接收：\(text(flow["received_bytes"])) 字节")
                 if scope == "unresolved" {
                     lines.append("    判断：远端地址未提供，无法区分局域网与公网")
@@ -218,7 +225,7 @@ public enum LogReader {
                 lines.append("  连续性：本批次曾读取失败或计数回退；增量基线已重建，不能累加成完整历史")
             }
             if details["phase"] as? String == "before_allow" {
-                lines.append("  时间边界：这是准备放行前的读取；到实际清除规则之间仍可能有未计入的命中。是否放行见后续门禁日志")
+                lines.append("  时间边界：这是准备放行前的读取；到实际切换放行规则之间仍可能有未计入的命中。是否放行见后续门禁日志")
             }
             lines.append("  范围：没有逐包进程、目标或内容；不能与 socket 采样逐条配对，零计数也不能证明没有绕过")
         } else if event == "pf_block_observation_failed" || event == "pf_block_observation_gap" {

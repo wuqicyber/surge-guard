@@ -151,7 +151,7 @@ public struct EgressObservation: Codable {
         return fields
     }
 
-    private static func endpointHost(_ endpoint: String) -> String? {
+    public static func endpointHost(_ endpoint: String) -> String? {
         // nettop uses dot-separated ports for unbracketed IPv6, colon-separated ports for IPv4/bracketed IPv6.
         guard let separator = endpoint.lastIndex(where: { $0 == ":" || $0 == "." }),
               let port = UInt16(endpoint[endpoint.index(after: separator)...]), port > 0 else { return nil }
@@ -161,6 +161,48 @@ public struct EgressObservation: Codable {
         host = host.components(separatedBy: "%")[0]
         var v4 = in_addr(), v6 = in6_addr()
         return inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1 ? host : nil
+    }
+
+    public static func parseSurgeDomains(dnsData: Data?, vipData: Data?) -> [String: [String]] {
+        var sets: [String: Set<String>] = [:]
+        func cleanDomain(_ raw: String) -> String? {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.utf8.count <= 255,
+                  !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return nil }
+            return trimmed
+        }
+        if let dnsData, dnsData.count <= 4_194_304,
+           let obj = try? JSONSerialization.jsonObject(with: dnsData) as? [String: Any] {
+            for entry in obj["dnsCache"] as? [[String: Any]] ?? [] {
+                guard let domain = (entry["domain"] as? String).flatMap(cleanDomain) else { continue }
+                for ip in entry["data"] as? [String] ?? [] where !ip.isEmpty {
+                    sets[ip, default: []].insert(domain)
+                }
+            }
+            for entry in obj["local"] as? [[String: Any]] ?? [] {
+                guard let domain = (entry["domain"] as? String).flatMap(cleanDomain) else { continue }
+                if let ip = entry["data"] as? String, !ip.isEmpty {
+                    sets[ip, default: []].insert(domain)
+                }
+            }
+        }
+        if let vipData, vipData.count <= 4_194_304,
+           let obj = try? JSONSerialization.jsonObject(with: vipData) as? [String: Any] {
+            for entry in obj["items"] as? [[String: Any]] ?? [] {
+                guard let domain = (entry["domain"] as? String).flatMap(cleanDomain),
+                      let ip = entry["IP"] as? String, !ip.isEmpty else { continue }
+                sets[ip, default: []].insert(domain)
+            }
+        }
+        return sets.mapValues { Array($0.sorted().prefix(5)) }
+    }
+
+    public static func surgeDomainMap() -> [String: [String]] {
+        guard geteuid() != 0, FileManager.default.isExecutableFile(atPath: Probe.surgeCLI),
+              (try? Probe.trustedSurgePID()) != nil else { return [:] }
+        let dnsData = (try? Command.checked(Probe.surgeCLI, ["--raw", "dump", "dns"], timeout: 2)).map { Data($0.utf8) }
+        let vipData = (try? Command.checked(Probe.surgeCLI, ["--raw", "dump", "virtual-ip-db"], timeout: 2)).map { Data($0.utf8) }
+        return parseSurgeDomains(dnsData: dnsData, vipData: vipData)
     }
 
     public static func isPublicAddress(_ host: String) -> Bool {

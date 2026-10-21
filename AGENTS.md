@@ -9,6 +9,8 @@ Read README.md first. It is the operational contract for all three components.
 - `Sources/CPcap`: SDK bridge to macOS system libpcap; no downloaded dependency.
 - `Sources/SurgeGuard`: privileged daemon, CLI and SwiftBar menu renderer.
 - `Sources/SurgeGate`: unprivileged application startup/session/shutdown service.
+- `Sources/SurgeLaunch`: fixed set-group (`2755`, `root:_surge_guard`) C launcher
+  for the official signed Surge application under `persistent_tcp`.
 - `integrations/swiftbar`: thin plugin invoking the installed renderer.
 - `scripts/install-user.sh`: user service/plugin installation; never run with sudo.
 - `Tests/SurgeGuardTests`: standalone checks; no live firewall mutation or app quits.
@@ -71,11 +73,24 @@ Read README.md first. It is the operational contract for all three components.
   bounded, and retain JSON evidence/deduplication and failure/recovery events.
 - The optional packet recorder is independent of PF permission. Keep its fixed
   all-interface capture, private bounded ring, persistent gap flags and fresh
-  job/boot-bound status. Root must drop privileges before Surge request queries.
+  job/boot-bound status. `audit-stop` persistently disables launchd automatic
+  startup; `audit-start` explicitly re-enables it. Root must drop privileges
+  before Surge request queries.
   Rejoin the supervisor process group before exec so launchd reaps the capture
   child after crashes. Never equate a running collector, zero reported drops,
   request-window overlap or absent request match with verified no-bypass coverage.
   Raw packet prefixes may contain payload; keep captures/request metadata private.
+- Optional `persistent_tcp` restricts ready-state non-loopback TCP to the verified
+  Surge VIF (`198.18.0.1`, `keep state (if-bound)`) and Surge's dedicated effective
+  group (`_surge_guard`, `60000...60999`, `keep state (if-bound)`). UDP is outside
+  this mode's enforcement scope. Verify all four native `sysctl` process credential
+  fields (`cr_uid`, `p_ruid`, `cr_groups.0`, `p_rgid`) with exact `kinfo_proc` size
+  and no `ps` fallback. Cache Surge code-signature trust only by `(pid, birthTime)`
+  and invalidate immediately if a second `Surge` candidate process appears.
+- `SurgeGate` supports persistent `update-pause` / `update-resume` (`update-mode.json`)
+  acknowledged by nonce + fresh status, plus `start` / `stop` / `restart`. Keep
+  30s retry backoff on real launch/quit failures without penalizing post-launch
+  grace windows or waiting-for-block states.
 
 ## Validation and delivery
 

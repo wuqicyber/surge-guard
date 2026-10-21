@@ -14,8 +14,9 @@ belong in each machine's local configuration. No proxy credentials are required.
 
 This is an independent, experimental utility. Enhanced Mode captures normal
 application traffic through Surge; Surge may then select a proxy or DIRECT.
-The external guard is **reactive readiness gating**, not proof that every packet
-is forced through Surge. Transition, early-boot and guard-crash windows remain.
+The default is **reactive readiness gating**. Optional `persistent_tcp` keeps a
+TCP egress restriction installed while ready, using a dedicated Surge group.
+Neither mode proves complete packet coverage or protection before PF starts.
 Read the [limits](#limits) and [acceptance procedure](docs/acceptance.md).
 
 ## Agent entry point
@@ -33,6 +34,15 @@ Start here when inspecting or deploying on another Mac:
 5. Use `doctor` and retained logs for failures. Record live tests separately from
    syntax/unit checks. Do not silently unlock networking to make a test pass.
 
+### Agent quick reference (architecture, paths & daily operations)
+
+| Component | Binary / Launchd Label | State & Config Files | Emergency / Maintenance Commands |
+| --- | --- | --- | --- |
+| **surge-guard** (Root PF Daemon) | `/Library/PrivilegedHelperTools/surge-guard`<br>`system/io.github.surge-guard` | Policy: `/Library/Application Support/SurgeGuard/policy.json`<br>Status: `/Library/Application Support/SurgeGuard/status.json`<br>Logs: `/private/var/db/surge-guard/events.log` | **Emergency disable PF block**: `sudo /Library/PrivilegedHelperTools/surge-guard unlock`<br>**Re-enable PF guard**: `sudo /Library/PrivilegedHelperTools/surge-guard start`<br>**Read-only flow & DNS domain check**: `surge-guard observe-egress` |
+| **surge-guard-launch** (Dedicated Group Launcher) | `/Library/PrivilegedHelperTools/surge-guard-launch` (`root:_surge_guard`, mode `2755`) | Group record: `/private/var/db/surge-guard/dedicated-group.json` (`gid` in `60000...60999`) | **Verify UID/GID & Surge signature**: `/Library/PrivilegedHelperTools/surge-guard-launch --check` |
+| **surge-gate** (User Companion) | `~/Library/Application Support/SurgeGuard/bin/surge-gate`<br>`gui/$UID/io.github.surge-guard.gate` | Config: `~/Library/Application Support/SurgeGuard/gate.json`<br>Status: `~/Library/Application Support/SurgeGuard/gate-status.json`<br>Update mode: `~/Library/Application Support/SurgeGuard/update-mode.json` | **Pause before manual Surge quit/update**: `surge-gate update-pause`<br>**Resume after Surge update**: `surge-gate update-resume`<br>**Stop/Start companion without touching PF**: `surge-gate stop` / `surge-gate start`<br>**Ordered reboot/shutdown**: `surge-gate shutdown --action restart\|shutdown` |
+| **surge-guard-audit** (Optional On-Demand Packet Audit) | `/Library/PrivilegedHelperTools/surge-guard-audit`<br>`system/io.github.surge-guard.audit` (disabled by default) | Dir: `/private/var/db/surge-guard/packet-audit/` | **Start on-demand capture**: `sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-start`<br>**Stop & disable auto-start**: `sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-stop` |
+
 No Trellis setup, Python runtime or package manager is needed. Packet-file reads
 use the system libpcap already shipped with macOS.
 
@@ -49,6 +59,7 @@ is not supported. SwiftBar is optional.
 | `Sources/CPcap` | SDK bridge to system libpcap for offline packet timestamp reads |
 | `Sources/SurgeGuard` | System daemon, management CLI and menu renderer |
 | `Sources/SurgeGate` | Native user-session companion; no Python or app wrapper |
+| `Sources/SurgeLaunch` | Fixed set-group launcher for the official Surge application |
 | `integrations/swiftbar` | Thin portable plugin |
 | `scripts/install-user.sh` | User companion and menu installer |
 | `examples` | Generic policy and app configuration |
@@ -63,7 +74,7 @@ scripts/check.sh
 .build/release/surge-guard rules
 ```
 
-The validation script builds both executables, runs tests and validates examples.
+The validation script builds the executables, runs tests and validates examples.
 It never loads PF, quits apps or installs services. The command-line checks are
 read-only. `status` can be `unknown` before the new daemon is installed.
 
@@ -121,6 +132,71 @@ this version evaluates the configured URL's default request context.
 At most eight URL checks are accepted. Unknown config fields and credentialed
 URLs are rejected. Keep secrets out of URLs, query strings and policy names:
 policy/status files are locally readable so the menu can inspect them.
+
+## Optional persistent TCP egress
+
+After upgrading the system guard and user companion, add `"persistent_tcp": true`
+to the existing policy and apply it with the installed `configure` command.
+Keep existing `mode` and route checks. Omitted/false retains the reactive gate;
+null, wrong types and unknown fields are errors. Older binaries reject this field,
+so upgrade before applying it.
+
+The ready-state anchor retains TCP rules: allow ordinary IPv4 TCP on the verified
+Surge VIF from its expected address; allow TCP sockets with Surge's dedicated
+effective group; reject all other non-loopback TCP, including IPv6. Both VIF and
+dedicated-group allow rules bind connection state to the interface.
+UDP is outside this opt-in's enforcement scope; it is not an all-protocol kill
+switch. IPv6 application TCP has no VIF exception in this
+version; Surge-owned IPv6 egress can match the group. There are no Tailscale,
+other-VPN, LAN or ordinary-user exceptions. Failed readiness still loads the
+existing full block and clears this Mac's old states. Policy/interface changes
+also pass through that blocked transition.
+
+If the requirement is only traversal through Surge, including Surge's own DIRECT
+decisions, use `examples/persistent-tcp.json` (`enhanced` plus `persistent_tcp`).
+User installation does not change an existing system policy or rule draft.
+Apply this policy explicitly after upgrading the system binary. Existing routes
+mode remains restrictive until explicitly replaced.
+
+The installer creates an empty `_surge_guard` group using a free ID in
+60000–60999 and installs `/Library/PrivilegedHelperTools/surge-guard-launch` as
+root:that-group, mode 2755. This is a **set-group, not set-user/root** launcher.
+It accepts no application path or arbitrary arguments, verifies the official
+Surge signature, requires the console user's UID, supplies a fixed environment
+and executes only `/Applications/Surge.app/Contents/MacOS/Surge`. `--check`
+validates the launch prerequisites without starting or quitting an app.
+
+SurgeGate uses this launcher in persistent mode. If Surge has restarted under
+the ordinary group, Gate waits for verified blocking, requests a normal quit,
+waits for actual exit, and starts the dedicated instance. Refused/timed-out
+quits remain errors; there is no forced termination or ordinary-identity
+fallback. Manual Enhanced Mode preferences are still respected. Without Gate,
+networking remains blocked until the dedicated launcher is used.
+
+The fixed group remains the only Surge TCP egress identity across restarts and
+application updates. It is never learned from the current process or widened to
+an ordinary group. Surge can use its normal installer/updater; Guard does not
+modify its bundle or require App Management permission. If Finder, Dock or an
+updater starts Surge under an ordinary group, that instance has no dedicated
+egress permission. Gate repairs it through the fixed launcher after verified
+blocking. Recovery may briefly interrupt networking; it never grants an
+ordinary-group fallback while waiting.
+
+The launcher controls only launches that pass through it. This does not promise
+that an independently started first instance already has the dedicated group.
+The protection boundary is the persistent PF rules, not the speed of identity
+repair. Surge's own executable retains its original ownership and permissions.
+
+Normal operation must report `enforcement: "persistent_tcp_egress"` in fresh
+`status --json`; an empty ready-state anchor is incorrect in this mode. PF rules
+remain loaded if the guard becomes unresponsive, but status correctly becomes
+stale. Read the performed/unperformed live tests in `docs/verification.md`;
+syntax checks and group startup alone do not establish packet enforcement.
+
+Update backups include the launcher when installed. Emergency unlock removes
+this guard's rules as before. Uninstall removes the launcher but retains the
+reserved group and its private installation record to avoid reassigning an
+identity that a surviving Surge process or files may still use.
 
 ## Install or update the system guard
 
@@ -243,6 +319,32 @@ The companion is green only with fresh running/ready status, no pending apps
 and a currently verified allowed network gate. Waiting/stale states are orange;
 errors are red. The SwiftBar display names are `surge-guard` and `surge-gate`.
 
+### Updating Surge
+
+Use **Prepare Surge update / 准备更新 Surge** and wait for acknowledgement before
+starting the official updater. Gate then pauses automatic Surge startup, identity
+repair and application restoration. It does not quit the current Surge, change
+PF, stop Guard or grant the updater networking exceptions. Finish/cancel the
+official update before choosing **Resume automatic startup / 恢复自动启动**.
+Download the complete installer while Surge works if the updater needs networking
+after quitting it. A stalled updater is not automatically killed or treated as
+finished; logs remain available and the pause has no automatic expiry.
+
+The private `update-mode.json` survives Gate restarts and machine reboots.
+Invalid/unreadable update state also suspends automatic actions. A matching
+request ID and fresh service status are required for acknowledgement; a timeout
+retains the request and reports failure, not permission to start updating.
+An operation already in progress must settle before the pause is acknowledged.
+Ordered shutdown is refused while update pause is active.
+
+The user CLI exposes `update-pause` and `update-resume`. Actual recovery failures
+retry no earlier than 30 seconds; waiting for verified blocking does not consume
+that cooldown. Each repair sends one normal quit request and never force-kills.
+The LaunchAgent uses `ProcessType=Interactive`; Foundation's child process group
+keeps Surge separate from Gate's group. Reinstall the user service to load the
+plist change. A second candidate Surge process invalidates cached trust; PID
+reuse is distinguished by its native start time.
+
 ### Application configuration
 
 Edit `~/Library/Application Support/SurgeGuard/gate.json`, using `examples/gate.json`.
@@ -309,7 +411,9 @@ hook for every Apple-menu shutdown, power loss or kernel failure.
 | `sudo surge-guard restore-policy` | Restore the policy saved before the last configure |
 | `sudo surge-guard unlock` | Remove this gate temporarily; start/reboot re-arms it |
 | `surge-gate status [--json]` | Normal user; companion state, pending apps and freshness |
-| `surge-gate logs` / `restart` / `edit-config` | Normal user companion management |
+| `surge-gate start` / `stop` / `restart` | Normal user; start, stop (without changing PF) or restart companion |
+| `surge-gate update-pause` / `update-resume` | Normal user; pause/resume automatic Surge relaunch during manual quits or updates |
+| `surge-gate logs` / `edit-config` | Normal user companion logs and bundle-ID config |
 
 JSON uses snake_case. `check` includes `version`, `ready`, `mode`, `readiness`,
 `reasons` and optional `session`. `status` includes `state`, `daemon_running`,
@@ -429,7 +533,7 @@ fresh configured routing results.
 observation, rule-load completion and verified block/state-cleanup completion.
 Rules alone do not terminate existing PF states, so the final completion matters.
 These intervals do not measure actual tunnel failure to event delivery, or prove
-zero escaped packets. Allowed mode still clears this guard's anchor: **faster
+zero escaped packets. Default allowed mode still clears this guard's anchor: **faster
 notification handling is not a permanent packet-level kill switch**. Strict
 no-fallback enforcement requires verified tunnel/system filtering support;
 the documented Surge `include-all-networks` profile option is under
@@ -453,6 +557,7 @@ Read the [packet-audit contract and commands](docs/packet-audit.md) before enabl
 | Path | Owner / purpose |
 | --- | --- |
 | `/Library/PrivilegedHelperTools/surge-guard` | root / system binary |
+| `/Library/PrivilegedHelperTools/surge-guard-launch` | root:dedicated group, 2755 / fixed unprivileged Surge launcher |
 | `/Library/LaunchDaemons/io.github.surge-guard.plist` | root / boot service |
 | `/Library/Application Support/SurgeGuard/policy.json` | root, 0644 / local policy |
 | `/Library/Application Support/SurgeGuard/status.json` | root, 0644 / recent status |
@@ -485,11 +590,13 @@ PF or flush another service's rules to recover this utility.
 
 - Blocked mode permits loopback and narrow DHCP/IPv6 link configuration; normal
   Internet/LAN traffic and DNS are blocked. This is not zero packets on the link.
-- Allowed mode clears this guard's anchor and preserves Surge policies, including
+- Default allowed mode clears this guard's anchor and preserves Surge policies, including
   DIRECT. It does not independently exclude physical-interface binding, alternate
   VPNs or Surge exclusions. Default-route readiness is not an unbypassable tunnel.
 - RunAtLoad cannot guarantee PF is enabled before the first boot-time packet.
-  SIGKILL/hangs while allowed can leave it allowed until service recovery.
+  In default mode, SIGKILL/hangs while allowed can leave it allowed until recovery.
+  Persistent TCP mode retains its existing rules, subject to PF attachment,
+  state/interface correctness and third-party/admin modifications.
 - A CLI policy name is not proof of residential-IP ownership or reachability.
 - macOS/Surge updates, other VPNs, Internet Sharing and custom PF require retesting.
 - An administrator/root attacker can alter this guard. It is not malware isolation.

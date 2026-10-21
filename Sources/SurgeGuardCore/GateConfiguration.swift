@@ -115,16 +115,24 @@ public struct GateStatusReport: Decodable {
     public struct State: Decodable {
         public let state: String
         public let pending: [String]
+        public let message: String?
+        public let surge: GateSurgeIdentity?
+        public let update: GateUpdate?
+        public let capabilities: [String]?
     }
 
     public func menuTitle(guardAllowed: Bool) -> String {
-        guard running, fresh else { return "🟠 状态待验证" }
+        if !running { return status.state == "stopped" ? "⚪️ 已停止（不影响当前联网）" : "🟠 未运行" }
+        guard fresh else { return "🟠 状态待验证" }
         switch status.state {
         case "ready":
             guard guardAllowed else { return "🟠 等待网络门禁" }
             return status.pending.isEmpty ? "🟢 已就绪" : "🟠 恢复应用中（\(status.pending.count) 个待恢复）"
         case "restoring": return "🟠 恢复应用中（\(status.pending.count) 个待恢复）"
         case "waiting": return "🟠 等待网络门禁"
+        case "waiting_identity": return "🟠 等待阻断以修复身份"
+        case "update_paused": return "🟠 已暂停自动重开 Surge"
+        case "recovery_failed": return "🔴 Surge 恢复失败 · 等待重试"
         case "unknown": return "🟠 门禁状态读取异常"
         case "error": return "🔴 服务异常，请查看日志"
         case "shutting_down": return "🟠 正在有序关机 / 重启"

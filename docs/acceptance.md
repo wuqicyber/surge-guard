@@ -141,6 +141,38 @@ the new session records a gap. Compare actual retained packet timestamps with
 sleep, power loss, early boot and high-rate traffic separately. Offline fixtures
 and zero reported drops do not establish full packet coverage or no bypass.
 
+## Persistent TCP mode
+
+Upgrade the guard, fixed launcher and SurgeGate with the old policy first.
+Run the installed launcher `--check` as the console user; it must report the
+normal UID and dedicated effective GID without opening Surge. Verify recovery
+and keep a private copy of the previous policy before enabling `persistent_tcp`.
+Existing route restrictions remain required until explicitly changed. For a
+transit-only policy, apply `examples/persistent-tcp.json` after the binary upgrade;
+this removes route-policy restrictions while retaining enhanced-mode and identity
+checks. Unknown identities stay blocked.
+
+With capture active, confirm the ready anchor is nonempty, contains the
+dedicated group/VIF permissions and final TCP refusal, and uses interface-bound
+states. Verify ordinary IPv4 TCP through the VIF, system-proxy requests, selected
+proxy requests and Surge DIRECT. Compare own-label counters and socket group
+attribution; group launch success alone is insufficient.
+
+Continuously attempt fresh connections and maintain an established TCP stream
+while normally quitting Surge and toggling Enhanced Mode. Correlate physical
+packet observations, process metadata and peer responses; a captured outbound
+packet without a response can be observed before filtering. Test abrupt loss
+separately. During an explicitly authorized guard pause, repeat a normal Surge
+quit to establish that blocking does not depend on the daemon reacting. Restore
+the same daemon promptly, and verify fresh status and automatic SurgeGate recovery.
+
+Test a manually launched ordinary-group Surge: networking must remain blocked
+until Gate completes normal identity correction. Check policy changes, interface
+replacement and migration of old states. IPv6 application TCP is default-blocked
+in this implementation; do not claim IPv6 VIF functionality or UDP enforcement.
+No Tailscale or other VPN exception exists. Update/reboot and early-boot ordering
+remain separate acceptance scenarios.
+
 ## PF coexistence
 
 Capture root `pfctl -sr`, relevant nested anchors and PF references before installation. Confirm the guard attaches first, normal updates change only its anchor, and unlock releases only its own reference. Verify Internet Sharing, VM networking and other PF users if they are part of your setup. The initial main-ruleset reload deserves separate review.
@@ -148,3 +180,44 @@ Capture root `pfctl -sr`, relevant nested anchors and PF references before insta
 ## Releasing results
 
 Publish only sanitized results: OS/Surge versions, scenario pass/fail/inconclusive, measured latency range and remaining limitations. Exclude node IPs, profiles, usernames, device IDs, service UUIDs, logs and raw captures. A release should remain experimental until these tests have been completed.
+
+## Ordinary-group startup and recovery
+
+Keep the dedicated PF group fixed. With the native application bundle unchanged,
+normally quit Surge and start it via LaunchServices as the console user. Hold
+Gate recovery briefly to inspect the ordinary effective group. It must never
+cause a PF exception for that group. Capture bounded public TCP probes and peer
+responses while the wrong instance exists, then resume Gate and verify normal
+termination, dedicated startup and fresh allowed status. A bounded guard pause
+with an independent timed resume can isolate already-loaded PF enforcement from
+a daemon-triggered full block. Record that interval separately; do not equate
+post-resume full blocking with proof of the pre-resume interval. Real application
+updates, power loss and early boot require separate tests.
+
+## Update pause and recording lifecycle
+
+With both services fresh, request `surge-gate update-pause` and require its
+matching acknowledgement before starting the official updater. Restart only
+SurgeGate and verify the same persisted pause is acknowledged by the new process,
+with no automatic application launch or identity correction. Guard and its PF
+rules must remain active. The menu must display pause duration, reason, current
+Surge identity and the separate Guard state. Finish or cancel the official
+updater before `update-resume`; verify fresh Gate status and the fixed group
+before interpreting recovery as successful. A command timeout is not permission
+to start updating. Malformed pause records must stop automatic recovery.
+
+Separately test a normal Surge quit while paused: verify process absence, fresh
+blocking, no automatic relaunch, and bounded TCP probes with physical packet
+evidence. After resume, verify the dedicated identity and working positive
+controls. Do not equate this simulation with an actual Sparkle upgrade, a hung
+installer, a forced crash or a physical reboot.
+
+Use full packet recording only for an authorized bounded investigation. Finish
+offline review or preserve the relevant closed ring files before restarting
+recording; an overlapping export and recorder restart can lose the test window.
+`audit-stop` must remove the job, wait for the capture child to exit, and persist
+the disabled launchd flag without changing Guard's PID or PF rules. Retained
+files remain available. `audit-start` must explicitly re-enable the job and
+produce fresh capture status. Record this intentional gap separately from a
+Surge request-history gap. A stopped recorder is not disabled protection, and
+neither a clean capture nor PF drop counters prove universal absence of bypass.

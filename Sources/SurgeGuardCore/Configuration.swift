@@ -23,13 +23,21 @@ public struct Configuration: Codable, Equatable {
     public var version: Int
     public var mode: String
     public var routeChecks: [RouteCheck]
+    public var persistentTCP: Bool?
+    public var usesPersistentTCP: Bool { persistentTCP == true }
+    public var enforcement: String { usesPersistentTCP ? "persistent_tcp_egress" : "surge_readiness_gate" }
+    enum CodingKeys: String, CodingKey {
+        case version, mode, routeChecks
+        case persistentTCP = "persistentTcp"
+    }
 
     public static let enhanced = Configuration(version: 1, mode: "enhanced", routeChecks: [])
 
-    public init(version: Int, mode: String, routeChecks: [RouteCheck]) {
+    public init(version: Int, mode: String, routeChecks: [RouteCheck], persistentTCP: Bool? = nil) {
         self.version = version
         self.mode = mode
         self.routeChecks = routeChecks
+        self.persistentTCP = persistentTCP
     }
 
     public func validate() throws {
@@ -65,7 +73,9 @@ public struct Configuration: Codable, Equatable {
     public static func decode(_ data: Data) throws -> Configuration {
         guard data.count <= 65_536,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == ["version", "mode", "route_checks"],
+              Set(object.keys).isSubset(of: ["version", "mode", "route_checks", "persistent_tcp"]),
+              Set(object.keys).isSuperset(of: ["version", "mode", "route_checks"]),
+              (object["persistent_tcp"] == nil || object["persistent_tcp"] is Bool),
               let routes = object["route_checks"] as? [[String: Any]],
               routes.allSatisfy({ route in
                   let keys = Set(route.keys)

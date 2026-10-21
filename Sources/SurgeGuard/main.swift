@@ -7,6 +7,7 @@ final class Daemon {
     let firewall = Firewall()
     let lock: RuntimeLock
     var allowed = false
+    var allowedInterface: String?
     var lastReason = ""
     var store: SCDynamicStore?
     var source: CFRunLoopSource?
@@ -17,7 +18,9 @@ final class Daemon {
     var surgeExitDetectedAt: Double?
     var surgeConnection: SCNetworkConnection?
     var surgeConnectionService: String?
-    var nextSurgeSearch: Double = 0
+    var surgeTrust = SurgeProcessTrust()
+    var lastSurgeCandidates: [SurgeProcess] = []
+    var surgeWatchGeneration = 0
     var nextFirewallAudit: Double = 0
     let runID = UUID().uuidString
     var firewallVerified: Double = 0
@@ -48,24 +51,26 @@ final class Daemon {
     }
 
     func surgeProcessTrusted() throws -> Bool {
-        if let pid = trustedSurgePID, kill(pid, 0) == 0 { return true }
+        let candidates = try Probe.surgeCandidates()
+        let sameCandidates = candidates == lastSurgeCandidates
+        lastSurgeCandidates = candidates
+        let candidate = try surgeTrust.trustedPID(candidates: candidates, validate: Probe.surgeSignatureValid)
+        if let pid = candidate, sameCandidates, trustedSurgePID == pid, kill(pid, 0) == 0 { return true }
         trustedSurgePID = nil
         surgeExitSource?.cancel()
         surgeExitSource = nil
-
-        let now = SystemClock.seconds
-        guard now >= nextSurgeSearch else { return false }
-        nextSurgeSearch = now + 1
-        guard let pid = try Probe.trustedSurgePID() else { return false }
+        surgeWatchGeneration += 1
+        let watchGeneration = surgeWatchGeneration
+        guard let pid = candidate else { return false }
 
         let exitSource = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
         exitSource.setEventHandler { [weak self] in
-            guard let self, self.trustedSurgePID == pid else { return }
+            guard let self, self.trustedSurgePID == pid, self.surgeWatchGeneration == watchGeneration else { return }
             self.surgeExitDetectedAt = SystemClock.seconds
             self.trustedSurgePID = nil
             self.surgeExitSource?.cancel()
             self.surgeExitSource = nil
-            self.nextSurgeSearch = 0
+            self.surgeTrust = SurgeProcessTrust()
             self.reconcile(forceFirewallAudit: true, lossReason: "surge_process_exited", detectedAt: self.surgeExitDetectedAt)
         }
         trustedSurgePID = pid
@@ -161,7 +166,8 @@ final class Daemon {
         defer { surgeExitDetectedAt = nil }
         do {
             let received = detectedAt ?? SystemClock.seconds
-            let loss = try lossReason ?? watchSurgeConnection()
+            var loss = try lossReason ?? watchSurgeConnection()
+            if loss == nil, try !surgeProcessTrusted() { loss = "surge_process_untrusted_or_ambiguous" }
             // Close before route/signature/configuration probes and PF integrity queries.
             if allowed, let loss {
                 let timing = try firewall.block()
@@ -174,7 +180,7 @@ final class Daemon {
                 sessionFailure = "rule_probe_pending"
                 let snapshot = GuardSnapshot(runId: runID, firewallVerifiedUptime: firewallVerified, allowed: false,
                                              configurationMode: configuration?.mode ?? "invalid", readiness: nil,
-                                             session: nil, reasons: [loss])
+                                             session: nil, reasons: [loss], enforcement: configuration?.enforcement ?? "surge_readiness_gate")
                 try RootFiles.write(try JSON.encode(snapshot), to: Paths.snapshot, mode: 0o644)
                 EventLog.write("readiness_loss_blocked", level: "warning", message: loss,
                                details: ["run_id": runID, "detected_uptime": received, "pf": "blocked",
@@ -204,6 +210,11 @@ final class Daemon {
             do {
                 config = try Configuration.load()
                 if configuration != config {
+                    if allowed {
+                        try firewall.block()
+                        allowed = false
+                        firewallVerified = SystemClock.seconds
+                    }
                     generation += 1
                     session = nil
                     sessionChecked = 0
@@ -217,6 +228,23 @@ final class Daemon {
                 configuration = nil
                 generation += 1
                 session = nil
+            }
+            var egressGroup: UInt32?
+            var surgeInterface: String?
+            if config?.usesPersistentTCP == true {
+                do {
+                    egressGroup = try DedicatedEgress.group()
+                    guard let pid = trustedSurgePID,
+                          try DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: egressGroup!) else {
+                        throw GuardError("surge_egress_identity_mismatch")
+                    }
+                    surgeInterface = try Probe.surgeInterface()
+                    if allowed, allowedInterface != surgeInterface {
+                        try firewall.block()
+                        allowed = false
+                        firewallVerified = SystemClock.seconds
+                    }
+                } catch { reasons.append("persistent_tcp_not_ready: \(error)") }
             }
             if config?.mode == "routes" {
                 if observation?.ready == true, let config { updateSession(config, force: forceFirewallAudit) }
@@ -239,10 +267,23 @@ final class Daemon {
                     if let loss = try watchSurgeConnection(), !reasons.contains(loss) { reasons.append(loss) }
                 } catch { reasons.append("readiness_probe_failed: \(error)") }
                 if config?.mode == "routes", SystemClock.seconds - sessionChecked >= 3 { reasons.append("rule_probe_expired") }
+                if config?.usesPersistentTCP == true {
+                    do {
+                        guard let group = egressGroup, let pid = trustedSurgePID,
+                              try DedicatedEgress.group() == group,
+                              try DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: group),
+                              try Probe.surgeInterface() == surgeInterface else {
+                            throw GuardError("Surge identity/interface changed before allowing TCP")
+                        }
+                    } catch { reasons.append("persistent_tcp_not_ready: \(error)") }
+                }
             }
             let ready = reasons.isEmpty && observation?.ready == true && config != nil
             if ready != allowed {
-                if ready { try firewall.allow() }
+                if ready {
+                    try firewall.allow(group: egressGroup, interface: surgeInterface)
+                    allowedInterface = surgeInterface
+                }
                 else { try firewall.block() }
                 allowed = ready
                 firewallVerified = SystemClock.seconds
@@ -250,7 +291,8 @@ final class Daemon {
             let reason = ready ? "allowed" : reasons.joined(separator: "; ")
             if reason != lastReason || SystemClock.seconds >= nextPublish {
                 let snapshot = GuardSnapshot(runId: runID, firewallVerifiedUptime: firewallVerified, allowed: allowed,
-                                             configurationMode: config?.mode ?? "invalid", readiness: observation, session: session, reasons: reasons)
+                                             configurationMode: config?.mode ?? "invalid", readiness: observation, session: session, reasons: reasons,
+                                             enforcement: config?.enforcement ?? "surge_readiness_gate")
                 try RootFiles.write(try JSON.encode(snapshot), to: Paths.snapshot, mode: 0o644)
                 nextPublish = SystemClock.seconds + 1
             }

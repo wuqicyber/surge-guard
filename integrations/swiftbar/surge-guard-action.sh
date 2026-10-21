@@ -6,12 +6,21 @@ label=io.github.surge-guard
 action=${1:---help}
 if [ "$#" -gt 1 ]; then printf '%s\n' 'Expected one action.' >&2; exit 2; fi
 case "$action" in
-    --help) printf '%s\n' 'Actions: restart, start, unlock, backup, rollback, restore-policy, logs, follow-logs, audit-logs, audit-requests, doctor, open-surge'; exit 0 ;;
-    restart|start|unlock|backup|rollback|restore-policy|logs|follow-logs|audit-logs|audit-requests|doctor|open-surge) ;;
+    --help) printf '%s\n' 'Actions: restart, start, unlock, backup, rollback, restore-policy, logs, follow-logs, audit-logs, audit-requests, doctor, open-surge, gate-update-pause, gate-update-resume, gate-start, gate-stop'; exit 0 ;;
+    restart|start|unlock|backup|rollback|restore-policy|logs|follow-logs|audit-logs|audit-requests|doctor|open-surge|gate-update-pause|gate-update-resume|gate-start|gate-stop) ;;
     *) printf '%s\n' 'Unknown recovery action.' >&2; exit 2 ;;
 esac
 if [ "$(id -u)" -eq 0 ]; then printf '%s\n' 'Run this menu action as your normal user.' >&2; exit 1; fi
 if [ "$action" = open-surge ]; then exec /usr/bin/open -a Surge; fi
+case "$action" in
+    gate-update-pause|gate-update-resume|gate-start|gate-stop)
+        gate_bin="$HOME/Library/Application Support/SurgeGuard/bin/surge-gate"
+        if [ ! -x "$gate_bin" ]; then printf '%s\n' 'SurgeGate is not installed.' >&2; exit 1; fi
+        if [ "$action" = gate-update-resume ]; then
+            printf '%s\n' 'Use this only after the official Surge update has completed or been cancelled. This does not repair or terminate the updater.'
+        fi
+        exec "$gate_bin" "${action#gate-}" ;;
+esac
 
 service_pid() {
     local service_text query_status pid

@@ -41,17 +41,116 @@ func appIDs(_ config: GateConfiguration) throws -> [String] {
     return true
 }
 
+var surgeLaunchProcess: Process?
+enum SurgeLaunchResult { case unchanged, launched, waitingForBlock, updatePaused }
+
+func surgeIdentity() -> GateSurgeIdentity {
+    var result = GateSurgeIdentity()
+    do {
+        let policy = try Configuration.load()
+        result.pid = try Probe.trustedSurgePID()
+        guard let pid = result.pid else { result.reason = "Surge absent, untrusted or multiple instances"; return result }
+        if policy.usesPersistentTCP {
+            let group = try DedicatedEgress.group()
+            result.expectedGroup = group
+            result.verified = try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group)
+            result.reason = result.verified ? "dedicated_group_verified" : "surge_egress_identity_mismatch"
+        } else { result.reason = "dedicated_group_not_required" }
+    } catch { result.reason = String(describing: error) }
+    return result
+}
+
+func ensureSurge(quitTimeout: Double) throws -> SurgeLaunchResult {
+    if try GateUpdate.load()?.paused == true { return .updatePaused }
+    let policy = try Configuration.load()
+    guard policy.usesPersistentTCP else { return try launch("com.nssurge.surge-mac") ? .launched : .unchanged }
+    let group = try DedicatedEgress.group()
+    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.nssurge.surge-mac").filter { !$0.isTerminated }
+    if let pid = try Probe.trustedSurgePID(), (apps.isEmpty || (apps.count == 1 && apps[0].processIdentifier == pid)),
+       try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group) { return .unchanged }
+    if !apps.isEmpty {
+        guard StatusReport.read().state == "blocked" else {
+            return .waitingForBlock
+        }
+        if try GateUpdate.load()?.paused == true { return .updatePaused }
+        for app in apps {
+            guard app.terminate() else { throw GuardError("Surge declined normal quit; dedicated launch cancelled") }
+        }
+        let deadline = SystemClock.seconds + quitTimeout
+        while apps.contains(where: { !$0.isTerminated }) && SystemClock.seconds < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        guard apps.allSatisfy(\.isTerminated) else { throw GuardError("Surge did not finish normal quit; no forced termination") }
+    }
+    if try GateUpdate.load()?.paused == true { return .updatePaused }
+    if surgeLaunchProcess?.isRunning == true { return .unchanged }
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: DedicatedEgress.launcher)
+    task.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+    task.standardInput = FileHandle.nullDevice
+    task.standardOutput = FileHandle.nullDevice
+    task.standardError = FileHandle.nullDevice
+    try task.run()
+    surgeLaunchProcess = task
+    let deadline = SystemClock.seconds + 10
+    while SystemClock.seconds < deadline {
+        if let pid = try Probe.trustedSurgePID(),
+           try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group) { return .launched }
+        guard task.isRunning else { throw GuardError("Dedicated Surge launcher exited with status \(task.terminationStatus)") }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    throw GuardError("Dedicated Surge startup timed out; networking remains gated")
+}
+
 struct GateStatus: Codable {
     var state: String
     var message: String
     var pending: [String]
+    var surge: GateSurgeIdentity?
+    var update: GateUpdate?
+    var capabilities = ["update_pause_v1"]
     var bootId = SystemClock.bootID
     var checkedUptime = SystemClock.seconds
     var pid = getpid()
 }
 
-func publish(_ state: String, _ message: String, pending: [String]) throws {
-    try UserPaths.write(try JSON.encode(GateStatus(state: state, message: message, pending: pending)), to: UserPaths.status)
+func publish(_ state: String, _ message: String, pending: [String], surge: GateSurgeIdentity? = nil, update: GateUpdate? = nil) throws {
+    try UserPaths.write(try JSON.encode(GateStatus(state: state, message: message, pending: pending, surge: surge, update: update)), to: UserPaths.status)
+}
+
+func readStatus() throws -> (status: GateStatus, running: Bool, fresh: Bool) {
+    let service = try Command.run("/bin/launchctl", ["print", "gui/\(getuid())/\(UserPaths.label)"])
+    if !FileManager.default.fileExists(atPath: UserPaths.status) {
+        let running = try StatusReport.serviceRunning(service)
+        return (GateStatus(state: running ? "waiting" : "stopped", message: running ? "Initializing" : "Service is not running", pending: []), running, false)
+    }
+    let status = try JSON.decode(GateStatus.self, from: Data(contentsOf: URL(fileURLWithPath: UserPaths.status)))
+    let running = try StatusReport.serviceRunning(service, pid: status.pid)
+    let fresh = running && status.bootId == SystemClock.bootID && SystemClock.seconds >= status.checkedUptime &&
+        SystemClock.seconds - status.checkedUptime < 15
+    return (status, running, fresh)
+}
+
+func updateMode(paused: Bool) throws {
+    let fd = try lock("update-command.lock")
+    defer { close(fd) }
+    let previous = try readStatus()
+    guard previous.fresh, previous.status.state != "shutting_down" else {
+        throw GuardError("SurgeGate must be running with fresh status and not shutting down")
+    }
+    let update = GateUpdate(paused: paused)
+    try UserPaths.write(try JSON.encode(update), to: GateUpdate.path)
+    let deadline = SystemClock.seconds + 20
+    while SystemClock.seconds < deadline {
+        let report = try readStatus()
+        if update.acknowledged(by: report.status.update, state: report.status.state, fresh: report.fresh) {
+            print(paused ? "SurgeGate confirmed update pause. Finish or cancel the official update before resuming. Guard/PF were not changed." :
+                "SurgeGate confirmed automatic recovery enabled. Network readiness: \(StatusReport.read().state).")
+            return
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    throw GuardError("Update mode saved but not acknowledged within 20s; do not start updating yet. Inspect Gate status/logs. The saved mode remains in effect.")
 }
 
 func lock(_ name: String, timeout: TimeInterval = 0) throws -> Int32 {
@@ -117,16 +216,24 @@ func run() throws {
     var lastGuardState: String?
     var lastSnapshot: Double = 0
     var nextLaunch: Double = 0
-    var nextSurgeLaunch: Double = 0
+    var surgeRetry = GateRetry()
+    var lastUpdate: GateUpdate?
     var shutdownAccepted = false
     var shutdownFailure: String?
     event("gate_started", "Waiting for fresh verified system guard status")
     while true {
         do {
             let config = try GateConfiguration.load()
+            let update = try GateUpdate.load()
+            if update != lastUpdate {
+                surgeRetry = GateRetry()
+                lastUpdate = update
+                if let update { event(update.paused ? "update_paused" : "update_resumed", update.reason) }
+            }
             if FileManager.default.fileExists(atPath: shutdownPath), !shutdownAccepted {
                 let request = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: shutdownPath))) as? [String: String]
                 try FileManager.default.removeItem(atPath: shutdownPath)
+                guard update?.paused != true else { throw GuardError("Shutdown request declined while Surge update is paused") }
                 guard let action = request?["action"], let requested = request?["boot_id"], requested == SystemClock.bootID else {
                     throw GuardError("Discarded invalid/previous-boot shutdown request")
                 }
@@ -141,15 +248,34 @@ func run() throws {
             if shutdownAccepted {
                 try publish(shutdownFailure == nil ? "shutting_down" : "error",
                             shutdownFailure ?? "macOS shutdown requested; snapshots paused", pending: pending)
+            } else if update?.paused == true {
+                try publish("update_paused", update!.reason, pending: pending, surge: surgeIdentity(), update: update)
             } else {
                 pending.removeAll { config.excludedApps.contains($0) }
-                if NSRunningApplication.runningApplications(withBundleIdentifier: "com.nssurge.surge-mac").isEmpty,
-                   SystemClock.seconds >= nextSurgeLaunch {
-                    nextSurgeLaunch = SystemClock.seconds + 30
-                    try launch("com.nssurge.surge-mac")
-                    event("surge_launch_requested", "Started Surge; still waiting for enhanced mode and policy")
+                var status = StatusReport.read()
+                var identity = surgeIdentity()
+                var waitingForIdentity = false
+                let needsSurge = identity.pid == nil || identity.reason == "surge_egress_identity_mismatch"
+                if !needsSurge, identity.verified || identity.reason == "dedicated_group_not_required" {
+                    surgeRetry.succeeded(at: SystemClock.seconds, launched: false)
                 }
-                let status = StatusReport.read()
+                if needsSurge, surgeRetry.canAttempt(at: SystemClock.seconds) {
+                    do {
+                        let result = try ensureSurge(quitTimeout: config.quitTimeoutSeconds)
+                        waitingForIdentity = result == .waitingForBlock
+                        surgeRetry.succeeded(at: SystemClock.seconds, launched: result == .launched)
+                        if result == .launched {
+                            event("surge_launch_requested", "Surge identity/startup verified; still waiting for enhanced mode and policy")
+                        }
+                    } catch {
+                        surgeRetry.failed(String(describing: error), at: SystemClock.seconds)
+                        event("surge_recovery_failed", "\(error). Retrying no earlier than 30 seconds")
+                    }
+                    status = StatusReport.read()
+                    identity = surgeIdentity()
+                }
+                // A pause arriving during a bounded operation is acknowledged only after that operation settles.
+                if try GateUpdate.load()?.paused == true { continue }
                 if status.state == "allowed", let target = pending.first, SystemClock.seconds >= nextLaunch {
                     switch Result(catching: { try launch(target) }) {
                     case .success(let requestedLaunch):
@@ -166,10 +292,13 @@ func run() throws {
                         nextLaunch = SystemClock.seconds + 30
                     }
                 }
-                let state = status.state == "unknown" ? "unknown" : status.state == "allowed" ? (pending.isEmpty ? "ready" : "restoring") : "waiting"
-                let message = status.state == "allowed" ? "\(pending.count) application(s) pending" : "\(status.state): \(status.reason)"
-                try publish(state, message, pending: pending)
-                if message != lastMessage {
+                let state = surgeRetry.failure != nil ? "recovery_failed" : waitingForIdentity ? "waiting_identity" :
+                    status.state == "unknown" ? "unknown" : status.state == "allowed" ? (pending.isEmpty ? "ready" : "restoring") : "waiting"
+                let message = surgeRetry.failure.map { "\($0); next attempt in \(max(0, Int(ceil(surgeRetry.nextAttempt - SystemClock.seconds))))s" } ??
+                    (waitingForIdentity ? "Waiting for verified blocking before correcting Surge's egress identity" :
+                        status.state == "allowed" ? "\(pending.count) application(s) pending" : "\(status.state): \(status.reason)")
+                try publish(state, message, pending: pending, surge: identity, update: update)
+                if message != lastMessage, surgeRetry.failure == nil {
                     let code: String
                     if status.state == "unknown" { code = "gate_status_unavailable" }
                     else if lastGuardState == "unknown" { code = "gate_status_recovered" }
@@ -280,6 +409,7 @@ func install() throws {
     try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
     let plist: [String: Any] = ["Label": UserPaths.label, "ProgramArguments": [UserPaths.binary, "run"],
                                "RunAtLoad": true, "KeepAlive": true, "ThrottleInterval": 10,
+                               "ProcessType": "Interactive",
                                "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"]
     try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: URL(fileURLWithPath: UserPaths.plist), options: .atomic)
     try Command.checked("/bin/launchctl", ["enable", domain + "/" + UserPaths.label])
@@ -292,7 +422,11 @@ SurgeGate — user-session companion to Surge Guard
   install / setup       Install/update user service; migrate legacy config without deleting it
   run                   Wait for verified protection, restore apps, checkpoint session every 30s
   status [--json]       Inspect this service (not a firewall claim)
-  restart               Restart the user service
+  start                 Start the user service if stopped
+  stop                  Stop the user service without changing current network or PF rules
+  restart               Restart (or start) the user service
+  update-pause          Persist update pause and wait for Gate acknowledgement; does not change PF
+  update-resume         Finish/cancel the official update, then resume automatic recovery
   edit-config           Edit bundle-ID application settings
   logs [--follow] [--json]
                         Readable recent events; optional follow or JSON Lines
@@ -310,17 +444,47 @@ do {
     case "install", "setup": try install()
     case "run": try run()
     case "status":
-        let status = try JSON.decode(GateStatus.self, from: Data(contentsOf: URL(fileURLWithPath: UserPaths.status)))
-        let service = try Command.run("/bin/launchctl", ["print", "gui/\(getuid())/\(UserPaths.label)"])
-        let running = service.status == 0 && service.output.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == "pid = \(status.pid)" }
-        let fresh = running && status.bootId == SystemClock.bootID && SystemClock.seconds >= status.checkedUptime && SystemClock.seconds - status.checkedUptime < 15
+        let (status, running, fresh) = try readStatus()
         if args.contains("--json") {
             struct Report: Encodable { var running: Bool; var fresh: Bool; var status: GateStatus }
             print(try JSON.encode(Report(running: running, fresh: fresh, status: status)))
         } else { print(fresh ? "\(status.state): \(status.message)" : "状态过期或服务未运行") }
+    case "start":
+        let domain = "gui/\(getuid())"
+        let service = "\(domain)/\(UserPaths.label)"
+        if try Command.run("/bin/launchctl", ["print", service]).status != 0 {
+            guard FileManager.default.fileExists(atPath: UserPaths.plist) else { throw GuardError("SurgeGate plist not found; run install first") }
+            try Command.checked("/bin/launchctl", ["enable", service])
+            try Command.checked("/bin/launchctl", ["bootstrap", domain, UserPaths.plist], timeout: 10)
+        }
+        print("SurgeGate service started.")
+    case "stop":
+        let service = "gui/\(getuid())/\(UserPaths.label)"
+        if try Command.run("/bin/launchctl", ["print", service]).status == 0 {
+            try Command.checked("/bin/launchctl", ["bootout", service], timeout: 10)
+        }
+        let fd = try lock("gate.lock", timeout: 10)
+        close(fd)
+        try? FileManager.default.removeItem(atPath: shutdownPath)
+        try publish("stopped", "Stopped by user; current network and PF rules are unchanged",
+                    pending: (try? GateSession.load().pending) ?? [], surge: surgeIdentity(), update: try? GateUpdate.load())
+        event("gate_stopped", "User stopped SurgeGate service; current network and PF rules unchanged")
+        print("SurgeGate service stopped. Current network and PF protection are unchanged.")
     case "restart":
-        try Command.checked("/bin/launchctl", ["kill", "SIGTERM", "gui/\(getuid())/\(UserPaths.label)"])
-        print("Restart requested; launchd restarts the user service")
+        let domain = "gui/\(getuid())"
+        let service = "\(domain)/\(UserPaths.label)"
+        if try Command.run("/bin/launchctl", ["print", service]).status == 0 {
+            try Command.checked("/bin/launchctl", ["kill", "SIGTERM", service])
+            print("Restart requested; launchd restarts the user service")
+        } else {
+            guard FileManager.default.fileExists(atPath: UserPaths.plist) else { throw GuardError("SurgeGate plist not found; run install first") }
+            try Command.checked("/bin/launchctl", ["enable", service])
+            try Command.checked("/bin/launchctl", ["bootstrap", domain, UserPaths.plist], timeout: 10)
+            print("SurgeGate was stopped; service started.")
+        }
+    case "update-pause", "update-resume":
+        guard args.count == 1 else { throw GuardError("Unexpected update mode arguments") }
+        try updateMode(paused: action == "update-pause")
     case "edit-config":
         try Command.checked("/usr/bin/open", ["-a", "TextEdit", UserPaths.config])
     case "logs":
@@ -329,6 +493,7 @@ do {
         try LogReader.show(path: UserPaths.log, follow: args.contains("--follow"), json: args.contains("--json"))
     case "shutdown":
         guard args.count == 3, args[1] == "--action", ["restart", "shutdown"].contains(args[2]) else { throw GuardError("Usage: shutdown --action restart|shutdown") }
+        guard try GateUpdate.load()?.paused != true else { throw GuardError("Finish or cancel the Surge update and resume Gate before ordered shutdown") }
         guard try Command.run("/bin/launchctl", ["print", "gui/\(getuid())/\(UserPaths.label)"]).output.contains("state = running") else { throw GuardError("SurgeGate service must be running") }
         guard !FileManager.default.fileExists(atPath: shutdownPath) else { throw GuardError("A shutdown request is already queued") }
         let request = ["action": args[2], "boot_id": SystemClock.bootID]

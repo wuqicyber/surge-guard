@@ -48,6 +48,48 @@ SwiftBar 单独提供状态、留存时间范围、预览、日志和启停入�
 抓包运行与完整归属验证是两件事，未知包不能直接判为绕过；环形覆盖之前的历史不可还原。
 详细安装、权限、保留范围和局限见 [包级审计说明](docs/packet-audit.md)。
 
+## 可选的常驻 TCP 限制
+
+可选的常驻 TCP 模式使用 `"persistent_tcp": true`，须先升级系统守护、专用启动器和
+SurgeGate，再将该字段加入原配置，保留原有分流条件。省略或设为 `false` 保持响应式
+门禁；旧版程序不认识此字段，不能先更新配置再升级。
+
+此模式在放行状态也保留 PF 规则：普通 IPv4 TCP 只允许经已验证的 Surge VIF 和预期
+源地址；Surge 专用有效组的 TCP 可以出站；其余非回环 TCP 默认拒绝，包括 IPv6。
+UDP 不在此开关的常驻保护范围内，不能据此宣称所有协议零逃逸。
+放行连接状态绑定接口，不允许 VIF 状态自动在物理接口匹配。当前版本不提供普通应用
+IPv6 的 VIF 例外，也不提供 Tailscale、其他 VPN 或局域网例外。就绪或分流条件失败时，
+仍执行原有完整阻断与本机旧连接状态清理。
+
+只要求经过 Surge、允许 Surge 自己决定 DIRECT 或代理时，可明确应用
+`examples/persistent-tcp.json`（`enhanced` + `persistent_tcp: true`）。
+用户安装器保留现有系统策略、规则草稿和更新暂停状态，不静默取消已有分流限制。
+
+更新 Surge 前，在菜单点“准备更新 Surge”，等 Gate 确认暂停后再启动官方更新。
+暂停自动启动、身份修复和应用恢复；当前 Surge 不被该按钮退出，Guard/PF 独立运行。
+更新完成或取消后点“恢复自动启动”。更新卡住不会自动解除保护、强杀更新器或自动恢复。
+需要在 Surge 退出后联网的安装流程，应先在 Surge 正常时下载完整安装包。
+
+暂停保存在私有 `update-mode.json`，跨 Gate 重启和电脑重启保留；损坏或读失败时暂停
+自动操作并报告错误。确认超时仍保留请求，不能开始更新。已有退出/启动操作须完成后才
+确认暂停；暂停期间拒绝有序关机请求。真实恢复失败执行 30 秒退避；单纯等待 Guard
+确认阻断不占用退避。每次身份修复只发送一次正常退出请求，不强制终止。
+
+安装器创建无普通成员的 `_surge_guard` 组，并安装 root 所有、模式为 `2755` 的固定
+`surge-guard-launch`。它仅改变有效组，不赋予 root 用户身份，只能运行签名验证通过的
+官方 Surge。普通用户执行该启动器的 `--check` 可以只读核对 UID/GID 和签名。
+SurgeGate 会在确认阻断后，以正常退出方式纠正 Surge 的错误启动身份，再调用启动器；
+退出被拒绝或超时就保持错误状态，不强制终止，也不退回普通身份放行。
+
+目前专用启动器只控制经过它的启动，不能强制 Finder、Dock 或更新器独立启动的实例
+从第一刻就使用专用组。检测后重启属于恢复机制；若要求所有入口、包括更新后的第一次
+启动都具有该身份，还需要安装或执行前的控制，不能宣称当前实现已经满足。
+
+状态 JSON 的 `enforcement` 应为 `persistent_tcp_egress`，放行时自身 anchor 不应为空。
+守护卡住时已有规则继续保留，但状态应正常过期；开机最早阶段、接口重用、系统更新和
+管理员修改 PF 等边界仍须单独验收，不能把规则存在或编译成功当成零逃逸证明。
+详见 [验收步骤](docs/acceptance.md) 和 [实测记录](docs/verification.md)。
+
 ## Agent 从这里开始
 
 1. 阅读 README 和 `AGENTS.md`，先检查已有安装、配置、服务和日志。
@@ -55,6 +97,15 @@ SwiftBar 单独提供状态、留存时间范围、预览、日志和启停入�
 3. 为目标机器准备明确的配置，先验证，再安装。
 4. 先安装并确认 SwiftBar 离线恢复入口可用，再更新系统守护；确认系统状态后安装 SurgeGate。
 5. 排障从 `doctor`、最近日志和具体原因开始；实机验收单独记录，不用构建成功代替。
+
+### Agent 快速索引（组件职责、路径与常用操作）
+
+| 组件 | 可执行文件 / Launchd 标签 | 状态与配置文件 | 常用命令与应急操作 |
+| --- | --- | --- | --- |
+| **surge-guard**（Root 防火墙门禁） | `/Library/PrivilegedHelperTools/surge-guard`<br>`system/io.github.surge-guard` | 策略：`/Library/Application Support/SurgeGuard/policy.json`<br>状态：`/Library/Application Support/SurgeGuard/status.json`<br>日志：`/private/var/db/surge-guard/events.log` | **应急暂停保护并放行网络**：`sudo /Library/PrivilegedHelperTools/surge-guard unlock`<br>**重新启用保护**：`sudo /Library/PrivilegedHelperTools/surge-guard start`<br>**只读查看非 Surge 连接与候选域名**：`surge-guard observe-egress` |
+| **surge-guard-launch**（专用组启动器） | `/Library/PrivilegedHelperTools/surge-guard-launch`（`root:_surge_guard`，权限 `2755`） | 专用组记录：`/private/var/db/surge-guard/dedicated-group.json`（GID `60000...60999`） | **只读校验 UID/GID 与 Surge 签名**：`/Library/PrivilegedHelperTools/surge-guard-launch --check` |
+| **surge-gate**（用户态伴随服务） | `~/Library/Application Support/SurgeGuard/bin/surge-gate`<br>`gui/$UID/io.github.surge-guard.gate` | 配置：`~/Library/Application Support/SurgeGuard/gate.json`<br>状态：`~/Library/Application Support/SurgeGuard/gate-status.json`<br>更新模式：`~/Library/Application Support/SurgeGuard/update-mode.json` | **手动退出或升级 Surge 前暂停自动重开**：`surge-gate update-pause`<br>**升级或维护完成后恢复**：`surge-gate update-resume`<br>**停止/启动服务（不影响当前联网与 PF）**：`surge-gate stop` / `surge-gate start`<br>**有序重启/关机（保存会话并安全断网）**：`surge-gate shutdown --action restart\|shutdown` |
+| **surge-guard-audit**（按需抓包审计，默认关闭） | `/Library/PrivilegedHelperTools/surge-guard-audit`<br>`system/io.github.surge-guard.audit` | 目录：`/private/var/db/surge-guard/packet-audit/` | **临时开启连续抓包**：`sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-start`<br>**停止抓包并禁用开机自启**：`sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-stop` |
 
 不要将本机配置、Surge profile、订阅、节点凭据、原始日志或诊断包提交到 GitHub。
 
@@ -298,3 +349,11 @@ sudo /Library/PrivilegedHelperTools/surge-guard uninstall
 只删除自己的 PF 配置段，不覆盖其他服务的配置。
 
 此项目与 Surge 官方无关联，MIT 许可证。
+
+## Surge 启动和更新
+
+常驻 TCP 模式固定使用 `_surge_guard` 专用组，重启和更新均沿用原有组 ID，绝不根据当前 Surge 的组身份扩大 PF 放行范围。Surge 保留原安装及更新方式；本工具不修改 Surge.app，不需要 App 管理权限。
+
+Finder、Dock 或更新器可能先启动普通组实例。这个实例没有专用组的对外 TCP 放行资格；SurgeGate 等到系统守护确认阻断后，正常退出它，再通过固定启动器恢复专用组实例。身份错误、退出失败或恢复失败均保持阻断，不提供普通组放行的兜底。
+
+恢复可能造成短暂断网；普通 TCP 出口的阻断规则已常驻 PF，不依赖 Gate 恢复的速度。本方案不保证所有独立启动入口的第一个实例就具有专用组，已执行与未执行的网络验证见 [验证记录](docs/verification.md)。

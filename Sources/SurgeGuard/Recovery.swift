@@ -5,7 +5,8 @@ import SurgeGuardCore
 enum Recovery {
     static let destinations: [String: (String, mode_t)] = [
         "surge-guard": (Paths.binary, 0o755), "daemon.plist": (Paths.plist, 0o644),
-        "anchor": (Policy.anchorPath, 0o644), "policy.json": (Paths.configuration, 0o644)
+        "anchor": (Policy.anchorPath, 0o644), "policy.json": (Paths.configuration, 0o644),
+        "surge-guard-launch": (DedicatedEgress.launcher, 0o755)
     ]
 
     static func copy(_ source: String, to destination: String, mode: mode_t) throws {
@@ -19,7 +20,7 @@ enum Recovery {
     }
 
     @discardableResult static func save(kind: String) throws -> BackupManifest {
-        let manifest = try BackupManifest(kind: kind)
+        let manifest = try BackupManifest(kind: kind, includesLauncher: kind == "update" && FileManager.default.fileExists(atPath: DedicatedEgress.launcher))
         try RootFiles.prepareRuntime()
         try RootFiles.preparePublicState()
         if !FileManager.default.fileExists(atPath: Paths.backups) {
@@ -73,6 +74,14 @@ enum Recovery {
         for name in manifest.files {
             let (destination, mode) = destinations[name]!
             try copy(Paths.backups + "/" + manifest.id + "/" + name, to: destination, mode: mode)
+        }
+        if manifest.kind == "update", !manifest.files.contains("surge-guard-launch"),
+           FileManager.default.fileExists(atPath: DedicatedEgress.launcher) {
+            try RootFiles.verify(DedicatedEgress.launcher)
+            try FileManager.default.removeItem(atPath: DedicatedEgress.launcher)
+        }
+        if try manifest.files.contains("surge-guard-launch") || Configuration.load().usesPersistentTCP {
+            try Admin.prepareDedicatedGroup()
         }
         EventLog.write("backup_restored", level: "warning", message: "Previous local files restored; verify their protection capabilities", details: ["kind": manifest.kind, "backup_id": manifest.id])
     }
