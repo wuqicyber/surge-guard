@@ -227,7 +227,8 @@ do {
               LogReader.format(egressLine).contains("en0"), "Readable egress log lost classification or evidence")
     let dnsFixture = Data("{\"dnsCache\":[{\"domain\":\"example.com\",\"data\":[\"1.1.1.1\",\"1.0.0.1\"]},{\"domain\":\"cdn.example.com\",\"data\":[\"1.1.1.1\"]}],\"local\":[{\"domain\":\"router.local\",\"data\":\"192.168.1.1\"}]}".utf8)
     let vipFixture = Data("{\"items\":[{\"domain\":\"vip.example.com\",\"IP\":\"198.18.0.10\"}]}".utf8)
-    let domainMap = EgressObservation.parseSurgeDomains(dnsData: dnsFixture, vipData: vipFixture)
+    let domainMap = try EgressObservation.parseSurgeDomains(dnsFixture, source: "dns")
+        .merging(EgressObservation.parseSurgeDomains(vipFixture, source: "virtual_ip")) { $0 + $1 }
     try check(domainMap["1.1.1.1"] == ["cdn.example.com", "example.com"] &&
               domainMap["192.168.1.1"] == ["router.local"] &&
               domainMap["198.18.0.10"] == ["vip.example.com"],
@@ -423,11 +424,16 @@ do {
           sudo) case "$1" in -v) exit 0 ;; -n) shift ;; esac; exec "$@" ;;
           guard) case "$1" in --help) echo legacy ;; check) exit 0 ;; esac ;;
           launchctl)
+            if [ "$1" = print ] && [ -f '\(directory)/second-failed' ]; then
+              if [ -f '\(directory)/queried' ]; then echo 'Service query failed'; exit 5; fi
+              touch '\(directory)/queried'
+            fi
+            if [ "$1" = print ] && [ -f '\(directory)/waiting' ] && [ ! -f '\(directory)/stopped' ]; then echo 'state = waiting'; exit 0; fi
             if [ "$1" = print ] && [ -f '\(directory)/query-failed' ]; then echo 'Service query failed' >&2; exit 5; fi
             if [ "$1" = print ] && [ -f '\(directory)/missing-pid' ]; then echo 'state = running'; exit 0; fi
             if [ "$1" = print ] && [ -f '\(directory)/absent' ]; then echo 'Could not find service' >&2; exit 113; fi
             case "$1" in
-              print) if [ -f '\(directory)/stopped' ]; then exit 1; fi; if [ -f '\(directory)/restarted' ]; then echo 'pid = 5678'; else echo 'pid = 1234'; fi ;;
+              print) if [ -f '\(directory)/stopped' ]; then echo 'Could not find service'; exit 113; fi; if [ -f '\(directory)/restarted' ]; then echo 'pid = 5678'; else echo 'pid = 1234'; fi ;;
               bootout) touch '\(directory)/stopped' ;;
               kill) touch '\(directory)/restarted' ;;
             esac ;;
@@ -502,6 +508,19 @@ do {
         try "".write(toFile: directory + "/absent", atomically: true, encoding: .utf8)
         let absent = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
         try check(absent.status == 0, "Known missing service blocked independent recovery")
+        try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+        try FileManager.default.removeItem(atPath: directory + "/absent")
+        try FileManager.default.removeItem(atPath: directory + "/stopped")
+        for marker in ["waiting", "second-failed"] { try "".write(toFile: directory + "/" + marker, atomically: true, encoding: .utf8) }
+        let secondFailure = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
+        let secondCalls = try String(contentsOfFile: directory + "/calls")
+        try check(secondFailure.status != 0 && secondCalls.contains("launchctl bootout") && !secondCalls.contains("-F rules"),
+                  "Second service-query failure cleared rules after a waiting job")
+        for marker in ["second-failed", "queried", "stopped"] { try FileManager.default.removeItem(atPath: directory + "/" + marker) }
+        try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
+        let waitingRecovery = try Command.run("/bin/bash", [testScript, "unlock"], timeout: 10)
+        let waitingCalls = try String(contentsOfFile: directory + "/calls")
+        try check(waitingRecovery.status == 0 && waitingCalls.contains("launchctl bootout"), "Loaded waiting job was not removed before clearing rules")
         try "".write(toFile: directory + "/calls", atomically: true, encoding: .utf8)
         let logBridge = try Command.run("/bin/bash", [testScript, "logs"], timeout: 10)
         let logCalls = try String(contentsOfFile: directory + "/calls")
@@ -656,6 +675,7 @@ do {
     try check(matching.ready, "Nested allowed proxy rejected")
     var different = explanation
     different["final"] = "Node C"
+    different["steps"] = [["group": "Residential", "selected": "Nested"], ["group": "Nested", "selected": "Node C"]]
     try check(!(try route(different)).ready, "Unlisted node accepted")
     different = explanation; different["rule-policy"] = "Other"
     try check(!(try route(different)).ready, "Wrong rule group accepted")
@@ -680,6 +700,7 @@ do {
     }
     for final in ["Node A", "Node C"] {
         var value = explanation; value["final"] = final
+        value["steps"] = [["group": "Residential", "selected": "Nested"], ["group": "Nested", "selected": final]]
         try check(try RouteResult.evaluate(JSONSerialization.data(withJSONObject: value), check: groupOnly).ready, "Group-only matching rejected a changed proxy node")
     }
     for (key, value) in [("rule-policy", "Other"), ("final", "DIRECT"), ("final", "REJECT"), ("final-type", "DIRECT"), ("final-type", "REJECT")] {
@@ -689,6 +710,19 @@ do {
     var unresolved = explanation; unresolved["steps"] = []
     try check(!(try RouteResult.evaluate(JSONSerialization.data(withJSONObject: unresolved), check: groupOnly)).ready, "Group-only matching accepted an unresolved group")
     try check(!groupOnly.allowsFinalPolicy(nil) && !groupOnly.allowsFinalPolicy(""), "Daemon result binding accepted a missing final policy")
+    for finalType in ["select", "url-test", "smart", "fallback", "load-balance", "unknown", "future-proxy"] {
+        var value = explanation; value["final-type"] = finalType
+        try check(!(try RouteResult.evaluate(JSONSerialization.data(withJSONObject: value), check: groupOnly)).ready,
+                  "Unknown or unresolved final type passed: \(finalType)")
+    }
+    for steps in [ [["group": "Residential"]],
+                   [["group": "Residential", "selected": "Residential"]],
+                   [["group": "Residential", "selected": "Nested"], ["group": "Other", "selected": "Node A"]],
+                   [["group": "Residential", "selected": "Nested"], ["group": "Nested", "selected": "Residential"]] ] {
+        var value = explanation; value["steps"] = steps
+        try check(!(try RouteResult.evaluate(JSONSerialization.data(withJSONObject: value), check: groupOnly)).ready,
+                  "Broken/cyclic selection chain passed")
+    }
     print("PASS: optional final-policy allowlist accepts group proxy changes; null/empty/malformed lists and direct/reject results fail closed")
 
     var snapshot = GuardSnapshot(runId: "test", firewallVerifiedUptime: 100, allowed: true,
@@ -967,6 +1001,138 @@ do {
     try check(!Paths.runtime.hasPrefix("/var/run/"), "Runtime state must not depend on a non-writable /var/run")
     try RootFiles.verify(URL(fileURLWithPath: Paths.runtime).deletingLastPathComponent().path, directory: true)
     print("PASS: protected runtime parent")
+    let reviewDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("surge-review-tests-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: reviewDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: reviewDirectory) }
+    let missingPolicy = reviewDirectory.appendingPathComponent("policy.json").path
+    try check(try Configuration.forInstallation(path: missingPolicy) == .enhanced,
+              "Fresh installation failed after its state directory was prepared")
+    try FileManager.default.createSymbolicLink(atPath: missingPolicy, withDestinationPath: missingPolicy + ".missing")
+    try rejects { _ = try Configuration.forInstallation(path: missingPolicy) }
+    print("PASS: install preflight handles a newly created state directory but rejects dangling policies")
+
+    let descendantFile = reviewDirectory.appendingPathComponent("descendant.pid").path
+    let beforeDescendants = descriptorCount()
+    for exitsEarly in [false, true, false] {
+        let script = "sleep 20 & child=$!; printf '%s' \"$child\" > \"$1\"; " + (exitsEarly ? "exit 0" : "wait")
+        let began = SystemClock.seconds
+        try rejects { _ = try Command.run("/bin/sh", ["-c", script, "fixture", descendantFile], timeout: exitsEarly ? 2 : 0.1) }
+        try check(SystemClock.seconds - began < 3, "Inherited output pipes defeated command bounds")
+        let child = Int32(try String(contentsOfFile: descendantFile))!
+        let deadline = SystemClock.seconds + 2
+        while kill(child, 0) == 0 && SystemClock.seconds < deadline { usleep(10_000) }
+        let gone = kill(child, 0) != 0 && errno == ESRCH
+        if !gone { kill(child, SIGKILL) }
+        try check(gone, "Timed-out command left its test descendant alive")
+    }
+    try rejects { _ = try Command.run("/bin/sleep", ["20"], input: String(repeating: "x", count: 16_000), timeout: 0.05) }
+    try check(descriptorCount() <= beforeDescendants + 2, "Inherited stdout/stderr or blocked stdin leaked descriptors")
+    print("PASS: timeouts and early parent exit reap command groups and close inherited/blocked pipes")
+
+    let waitingJob = try Command.run("/usr/bin/printf", ["state = waiting\n"])
+    try check(try StatusReport.serviceLoaded(waitingJob) && !StatusReport.serviceRunning(waitingJob), "Loaded idle job confused with absence")
+    try check(!(try StatusReport.serviceLoaded(absentService)), "Absent job treated as loaded")
+    try rejects { _ = try StatusReport.serviceLoaded(Command.run("/bin/sh", ["-c", "exit 5"])) }
+    try rejects { _ = try StatusReport.serviceRunning(Command.run("/usr/bin/printf", ["state = running\n"])) }
+    try rejects { _ = try StatusReport.serviceRunning(Command.run("/usr/bin/printf", ["state = running\npid = 0\n"])) }
+    try check(PacketAuditMenu(service: mockService, snapshot: nil).canStop &&
+              PacketAuditMenu(service: nil, snapshot: nil).canStop &&
+              !PacketAuditMenu(service: absentService, snapshot: nil).canStop,
+              "Unknown audit state concealed the stop action")
+    var incompleteAudit = PacketAuditSnapshot(capacityMegabytes: 256)
+    incompleteAudit.pid = 123; incompleteAudit.state = "incomplete"
+    let incompleteMenu = PacketAuditMenu(service: mockService, snapshot: incompleteAudit)
+    try check(incompleteMenu.canStop && incompleteMenu.title.contains("不完整"), "Incomplete collector was described as stopped")
+    incompleteAudit.state = "capturing"; incompleteAudit.checkedUptime = 0
+    try check(PacketAuditMenu(service: mockService, snapshot: incompleteAudit).title.contains("待验证"), "Stale capture described as active")
+    let stoppedReport = try JSON.decode(StatusReport.self, from: Data("{\"state\":\"stopped\",\"daemon_running\":false,\"reason\":\"test\"}".utf8))
+    try check(stoppedReport.stoppedExplanation.contains("未经核验") && !stoppedReport.stoppedExplanation.contains("直接放行"),
+              "Stopped guard claimed an empty firewall")
+    print("PASS: service queries fail closed; stopped and incomplete menus retain uncertainty and recovery")
+
+    let pendingLaunch = GatePendingLaunch(app: "com.example.fixture")
+    let pendingPath = reviewDirectory.appendingPathComponent("launch.json").path
+    try AtomicFile.write(JSON.encode(pendingLaunch), to: pendingPath, mode: 0o600)
+    try check(try GatePendingLaunch.load(from: pendingPath) == pendingLaunch, "Pending launch did not survive reload")
+    try check(!pause.acknowledged(by: pause, state: "update_pausing", fresh: true) &&
+              !resume.acknowledged(by: resume, state: "launch_pending", fresh: true), "Outstanding launch acknowledged an update")
+    let laterLaunch = GatePendingLaunch(app: "com.example.later")
+    try AtomicFile.write(JSON.encode(laterLaunch), to: pendingPath, mode: 0o600)
+    try pendingLaunch.complete(at: pendingPath)
+    try check(try GatePendingLaunch.load(from: pendingPath) == laterLaunch, "Obsolete launch completion cleared a newer request")
+    try laterLaunch.complete(at: pendingPath)
+    try check(try GatePendingLaunch.load(from: pendingPath) == nil, "Completed launch kept its pause fence")
+    let request = try GateShutdownRequest(action: "restart")
+    let requestPath = reviewDirectory.appendingPathComponent("shutdown.json").path
+    try AtomicFile.write(JSON.encode(request), to: requestPath, mode: 0o600)
+    try check(try GateShutdownRequest.load(from: requestPath)?.id == request.id, "Shutdown nonce was not preserved")
+    var oldRequest = try JSONSerialization.jsonObject(with: Data(JSON.encode(request).utf8)) as! [String: Any]
+    oldRequest["boot_id"] = "previous-boot"
+    try AtomicFile.write(String(decoding: JSONSerialization.data(withJSONObject: oldRequest), as: UTF8.self), to: requestPath, mode: 0o600)
+    try check(try GateShutdownRequest.load(from: requestPath) == nil, "Previous boot shutdown was replayed")
+    try rejects { _ = try GateShutdownRequest(action: "invalid") }
+    try check(GateShutdownPhase.submitted.canRetry && GateShutdownPhase.aborted.canRetry &&
+              GateShutdownPhase.submitted.preservesSession && GateShutdownPhase.aborted.preservesSession &&
+              !GateShutdownPhase.quitting.canRetry && !GateShutdownPhase.idle.preservesSession,
+              "Cancelled or aborted power request lost retry/session semantics")
+    print("PASS: persisted launch fence, pause acknowledgement, shutdown nonce/boot binding and cancellation retry")
+
+    let canonicalDNS = Data("{\"dnsCache\":[{\"domain\":\"Example.COM.\",\"data\":[\"2001:4860:4860:0000:0000:0000:0000:8888\",\"::ffff:1.1.1.1\"]}],\"local\":[]}".utf8)
+    let canonicalMap = try EgressObservation.parseSurgeDomains(canonicalDNS, source: "dns")
+    try check(canonicalMap["2001:4860:4860::8888"] == ["example.com"] && canonicalMap["1.1.1.1"] == ["example.com"],
+              "Equivalent IPv6/mapped IPv4 or domain spelling did not normalize")
+    let forwardingDNS = Data("{\"dnsCache\":[],\"local\":[{\"domain\":\"forward.example\",\"data\":null,\"server\":\"system\"},{\"domain\":\"mapped.example\",\"data\":\"1.1.1.1\"}]}".utf8)
+    try check(try EgressObservation.parseSurgeDomains(forwardingDNS, source: "dns")["1.1.1.1"] == ["mapped.example"],
+              "A local DNS forwarding rule discarded valid address mappings")
+    try rejects { _ = try EgressObservation.parseSurgeDomains(Data("{\"dnsCache\":[],\"local\":[{\"domain\":\"bad.example\"}]}".utf8), source: "dns") }
+    let rawVIP = Data("{\"items\":[{\"d\":\"vip.example.com\",\"i\":3323068426,\"l\":0,\"c\":0}]}".utf8)
+    try check(try EgressObservation.parseSurgeDomains(rawVIP, source: "virtual_ip")["198.18.0.10"] == ["vip.example.com"], "Raw integer virtual IP was lost")
+    for source in ["dns", "virtual_ip"] {
+        try rejects { _ = try EgressObservation.parseSurgeDomains(Data("{}".utf8), source: source) }
+    }
+    var enriched = observed
+    enriched.flows[0].remoteEndpoint = "[2001:4860:4860:0:0:0:0:8888]:443"
+    enriched.enrichDomains { source in
+        if source == "dns" { return canonicalDNS }
+        throw GuardError("fixture query failed")
+    }
+    let domainRoundTrip = try JSON.decode(EgressObservation.self, from: Data(JSON.encode(enriched).utf8))
+    try check(domainRoundTrip.flows[0].candidateDomains == ["example.com"] && domainRoundTrip.domainQueries?["dns"]?.status == "ok" &&
+              domainRoundTrip.domainQueries?["virtual_ip"]?.status == "failed", "JSON lost candidates or partial-query failures")
+    enriched.enrichDomains { Data(($0 == "dns" ? "{\"dnsCache\":[],\"local\":[]}" : "{\"items\":[]}").utf8) }
+    try check(enriched.domainQueries?.values.allSatisfy { $0.status == "empty" } == true && enriched.flows[0].candidateDomains == [],
+              "Successful empty lookup confused with failure or retained old names")
+    let manyDomains = (0..<8).map { ["domain": "node\($0).example", "data": ["1.1.1.1"]] as [String: Any] }
+    let boundedDomains = try EgressObservation.parseSurgeDomains(JSONSerialization.data(withJSONObject: ["dnsCache": manyDomains + manyDomains, "local": []]), source: "dns")
+    try check(boundedDomains["1.1.1.1"]?.count == 5, "Candidate domain deduplication/limit failed")
+    print("PASS: structured candidate domains, canonical IP matching, raw VIP schema and explicit query outcomes")
+    let menuProject = reviewDirectory.appendingPathComponent("menu-project")
+    let menuHome = reviewDirectory.appendingPathComponent("menu-home")
+    for path in ["scripts", ".build/release", "integrations/swiftbar"] {
+        try FileManager.default.createDirectory(at: menuProject.appendingPathComponent(path), withIntermediateDirectories: true)
+    }
+    let menuUser = menuHome.appendingPathComponent("Library/Application Support/SurgeGuard")
+    try FileManager.default.createDirectory(at: menuUser.appendingPathComponent("bin"), withIntermediateDirectories: true)
+    let sentinel = "existing Gate must remain unchanged"
+    let installedGate = menuUser.appendingPathComponent("bin/surge-gate")
+    try sentinel.write(to: installedGate, atomically: true, encoding: .utf8)
+    let fixtureExecutable = "#!/bin/sh\necho unexpected-service-query >> '\(menuProject.path)/mutations'\nexit 1\n"
+    for path in [".build/release/surge-guard", ".build/release/surge-gate", "integrations/swiftbar/surge-guard-action.sh", "integrations/swiftbar/surge-guard.5s.sh"] {
+        let target = menuProject.appendingPathComponent(path)
+        try fixtureExecutable.write(to: target, atomically: true, encoding: .utf8)
+        chmod(target.path, 0o700)
+    }
+    let sourceRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    var installer = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/install-user.sh"))
+    installer = installer.replacingOccurrences(of: "guard_bin=/Library/PrivilegedHelperTools/surge-guard", with: "guard_bin='\(menuProject.path)/.build/release/surge-guard'")
+    installer = installer.replacingOccurrences(of: "set -eu", with: "set -eu\nHOME='\(menuHome.path)'\nexport HOME")
+    let installerPath = menuProject.appendingPathComponent("scripts/install-user.sh")
+    try installer.write(to: installerPath, atomically: true, encoding: .utf8)
+    let menuInstall = try Command.run("/bin/sh", [installerPath.path, "--menu-only"], timeout: 10)
+    try check(menuInstall.status == 0 && !FileManager.default.fileExists(atPath: menuProject.appendingPathComponent("mutations").path) &&
+              String(contentsOf: installedGate) == sentinel && FileManager.default.isExecutableFile(atPath: menuUser.appendingPathComponent("bin/surge-guard-ui").path),
+              "Menu-only installer queried or modified a service")
+    print("PASS: menu-only installation updates the renderer without querying/restarting Gate or Guard")
     print("All checks passed. Live packet blocking has NOT been tested by this program.")
 } catch {
     fputs("FAIL: \(error)\n", stderr)

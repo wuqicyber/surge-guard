@@ -39,7 +39,7 @@ Start here when inspecting or deploying on another Mac:
 | Component | Binary / Launchd Label | State & Config Files | Emergency / Maintenance Commands |
 | --- | --- | --- | --- |
 | **surge-guard** (Root PF Daemon) | `/Library/PrivilegedHelperTools/surge-guard`<br>`system/io.github.surge-guard` | Policy: `/Library/Application Support/SurgeGuard/policy.json`<br>Status: `/Library/Application Support/SurgeGuard/status.json`<br>Logs: `/private/var/db/surge-guard/events.log` | **Emergency disable PF block**: `sudo /Library/PrivilegedHelperTools/surge-guard unlock`<br>**Re-enable PF guard**: `sudo /Library/PrivilegedHelperTools/surge-guard start`<br>**Read-only flow & DNS domain check**: `surge-guard observe-egress` |
-| **surge-guard-launch** (Dedicated Group Launcher) | `/Library/PrivilegedHelperTools/surge-guard-launch` (`root:_surge_guard`, mode `2755`) | Group record: `/private/var/db/surge-guard/dedicated-group.json` (`gid` in `60000...60999`) | **Verify UID/GID & Surge signature**: `/Library/PrivilegedHelperTools/surge-guard-launch --check` |
+| **surge-guard-launch** (Dedicated Group Launcher) | `/Library/PrivilegedHelperTools/surge-guard-launch` (`root:_surge_guard`, mode `2755`) | Group record: `/private/var/db/surge-guard/egress-group.json` (`gid` in `60000...60999`) | **Verify UID/GID & Surge signature**: `/Library/PrivilegedHelperTools/surge-guard-launch --check` |
 | **surge-gate** (User Companion) | `~/Library/Application Support/SurgeGuard/bin/surge-gate`<br>`gui/$UID/io.github.surge-guard.gate` | Config: `~/Library/Application Support/SurgeGuard/gate.json`<br>Status: `~/Library/Application Support/SurgeGuard/gate-status.json`<br>Update mode: `~/Library/Application Support/SurgeGuard/update-mode.json` | **Pause before manual Surge quit/update**: `surge-gate update-pause`<br>**Resume after Surge update**: `surge-gate update-resume`<br>**Stop/Start companion without touching PF**: `surge-gate stop` / `surge-gate start`<br>**Ordered reboot/shutdown**: `surge-gate shutdown --action restart\|shutdown` |
 | **surge-guard-audit** (Optional On-Demand Packet Audit) | `/Library/PrivilegedHelperTools/surge-guard-audit`<br>`system/io.github.surge-guard.audit` (disabled by default) | Dir: `/private/var/db/surge-guard/packet-audit/` | **Start on-demand capture**: `sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-start`<br>**Stop & disable auto-start**: `sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-stop` |
 
@@ -129,6 +129,10 @@ the current rule decision, not real egress geography, residential-IP status or
 server reachability. Process/URL/protocol-specific rules can affect actual apps;
 this version evaluates the configured URL's default request context.
 
+The selected group chain must be contiguous, acyclic and end at a recognized
+proxy type. Missing selections, unresolved group types and unknown final types
+fail closed, including when no final-node allowlist is supplied.
+
 At most eight URL checks are accepted. Unknown config fields and credentialed
 URLs are rejected. Keep secrets out of URLs, query strings and policy names:
 policy/status files are locally readable so the menu can inspect them.
@@ -163,8 +167,16 @@ The installer creates an empty `_surge_guard` group using a free ID in
 root:that-group, mode 2755. This is a **set-group, not set-user/root** launcher.
 It accepts no application path or arbitrary arguments, verifies the official
 Surge signature, requires the console user's UID, supplies a fixed environment
-and executes only `/Applications/Surge.app/Contents/MacOS/Surge`. `--check`
+and executes the fixed path `/Applications/Surge.app/Contents/MacOS/Surge`. `--check`
 validates the launch prerequisites without starting or quitting an app.
+The launcher opens the path components without following symlinks and compares
+`fstat`/`lstat`-equivalent inode, ownership, mode, size and timestamps before and
+after signature validation. A detected replacement or edit refuses the launch.
+`Surge.app` remains owned by the normal user so Sparkle can update it in place;
+no ownership or write-permission restriction is added to the app bundle.
+These checks narrow the race but do not make signature validation plus pathname
+`execve` atomic. The remaining check-to-exec window and a malicious process with
+the same user's bundle-write access are outside this launcher's guarantees.
 
 SurgeGate uses this launcher in persistent mode. If Surge has restarted under
 the ordinary group, Gate waits for verified blocking, requests a normal quit,
@@ -300,13 +312,17 @@ plugin directory. Alternatively pass the plugin directory explicitly:
 scripts/install-user.sh "$HOME/Documents/SwiftBar"
 ```
 
-For an existing combined control-center plugin:
+For an existing combined control-center plugin, update only the independent
+menu files (no Gate/Guard query, binary replacement or service restart):
 
 ```sh
 scripts/install-user.sh --menu-only
 ```
 
-Replace its old Surge-specific rendering function with a call to:
+`--menu-only` and `--recovery-only` both leave the companion untouched. To also
+install/update Gate, run `.build/release/surge-gate install` explicitly; that
+operation restarts the user service. Replace the combined plugin's old
+Surge-specific rendering function with a call to:
 
 ```sh
 "$HOME/Library/Application Support/SurgeGuard/bin/surge-guard-menu" --section
@@ -315,6 +331,9 @@ Replace its old Surge-specific rendering function with a call to:
 Do not keep both old and new Surge sections. No remote-service credentials or
 other private projects are part of this plugin. Normal menu text follows the
 system appearance; secondary/error colors have light and dark variants.
+A stopped guard does not establish that its old PF rules are gone. Missing, stale
+or incomplete recorder status is shown as uncertain, with a stop action when the
+service may still be running; the menu does not infer zero memory use.
 The companion is green only with fresh running/ready status, no pending apps
 and a currently verified allowed network gate. Waiting/stale states are orange;
 errors are red. The SwiftBar display names are `surge-guard` and `surge-gate`.
@@ -335,6 +354,13 @@ Invalid/unreadable update state also suspends automatic actions. A matching
 request ID and fresh service status are required for acknowledgement; a timeout
 retains the request and reports failure, not permission to start updating.
 An operation already in progress must settle before the pause is acknowledged.
+A launch timeout does not cancel an NSWorkspace request or the dedicated launcher.
+`pending-launch.json` preserves this uncertainty across Gate restarts, and the menu
+shows a pending pause until the callback, verified app startup, or launcher exit
+settles it. If Gate crashed and completion cannot be established, automatic
+recovery and pause acknowledgement remain blocked until the app appears or a
+reboot clears the previous boot's request; deleting the marker is not a safe
+cancellation procedure.
 Ordered shutdown is refused while update pause is active.
 
 The user CLI exposes `update-pause` and `update-resume`. Actual recovery failures
@@ -385,6 +411,9 @@ red shutdown), or:
 # Or: --action shutdown
 ```
 
+The request is published under a command lock before starting an absent service,
+so startup cannot restore apps ahead of the queued shutdown. Concurrent requests
+cannot overwrite one another. Service-query failures are errors, not absence.
 The running user service handles the request independently of the calling terminal.
 It saves the session, requests normal application quits, waits, quits Surge last,
 verifies the system guard is blocked, then requests macOS shutdown. Apps can show
@@ -392,6 +421,11 @@ unsaved-document dialogs; a refusal/timeout aborts. It never sends SIGKILL or
 `pkill -f`, and does not change macOS global restore settings. OS Automation
 permission may be required for the final system request. This mechanism is not a
 hook for every Apple-menu shutdown, power loss or kernel failure.
+An accepted Apple event only means the request was submitted: macOS or another
+app can still cancel it. Gate retains the saved session and pauses snapshots and
+recovery after submission or an aborted quit. Explicitly repeat ordered shutdown
+to retry (preserving already-quit apps), or restart Gate to resume recovery.
+A request still in the quitting phase cannot be queued again.
 
 ## Status, diagnostics and commands
 
@@ -509,6 +543,15 @@ as coverage gaps. Command/parsing failures generate an observation-unavailable
 event and recovery is recorded; observation failure never changes network policy.
 Short-lived connections between samples, packet-level enforcement and complete
 historical reconstruction are **not covered**. No events is not proof of no bypass.
+Normal-user `observe-egress`, including `--json`, adds structured
+`flows[].candidate_domains` (at most five deduplicated names per socket) and
+`domain_queries` for DNS and virtual-IP queries. Addresses are canonicalized,
+including IPv6 spellings and IPv4-mapped IPv6. Both raw `d`/integer `i` and
+exported `domain`/`IP` virtual-IP records are supported. Each query reports `ok`,
+`empty`, `failed` with its error, or `unavailable`; background daemon observations
+report `not_requested`. Root does not execute the user-owned Surge CLI for these
+lookups. These are cache candidates, not verified request domains or packet paths.
+
 SwiftBar provides **查看连接采样（只读）** and the existing log actions show this
 evidence. Background logging starts only after the updated system guard is installed;
 updating the user renderer alone adds the manual check, not background observation.

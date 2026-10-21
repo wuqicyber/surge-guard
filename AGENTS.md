@@ -90,7 +90,16 @@ Read README.md first. It is the operational contract for all three components.
 - `SurgeGate` supports persistent `update-pause` / `update-resume` (`update-mode.json`)
   acknowledged by nonce + fresh status, plus `start` / `stop` / `restart`. Keep
   30s retry backoff on real launch/quit failures without penalizing post-launch
-  grace windows or waiting-for-block states.
+  grace windows or waiting-for-block states. A timed-out launch is not cancelled:
+  retain its private boot-bound pending marker until completion, and never
+  acknowledge update pause while a launch remains unsettled. Publish shutdown
+  requests before bootstrap, serialize submission/consumption, and preserve the
+  session on retries after both quit failure and macOS cancellation.
+- Preserve the ordinary user's ownership of Surge.app for Sparkle. Launcher
+  fstat/path consistency checks reduce replacement races but do not make signed
+  validation and pathname exec atomic; document that remaining boundary.
+- `install-user.sh --menu-only` and `--recovery-only` update independent menu
+  files only; neither queries/restarts services nor replaces the Gate binary.
 
 ## Validation and delivery
 

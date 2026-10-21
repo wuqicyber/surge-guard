@@ -33,22 +33,12 @@ public struct GateUpdate: Codable, Equatable {
     }
 
     public static func load(from path: String = path) throws -> GateUpdate? {
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
-        if fd < 0, errno == ENOENT { return nil }
-        guard fd >= 0 else { throw GuardError("Cannot read update mode: errno \(errno); automatic recovery paused") }
-        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer { try? file.close() }
-        var info = stat()
-        guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG,
-              info.st_mode & 0o077 == 0, info.st_size <= 4096 else {
-            throw GuardError("Unsafe update mode file; automatic recovery paused")
-        }
-        return try decode(file.read(upToCount: 4097) ?? Data())
+        try UserPaths.readPrivate(path).map(decode)
     }
 
     public func acknowledged(by update: GateUpdate?, state: String, fresh: Bool) -> Bool {
         fresh && update == self && (paused ? state == "update_paused" :
-            !["update_paused", "shutting_down", "error", "recovery_failed"].contains(state))
+            !["update_paused", "update_pausing", "launch_pending", "shutting_down", "shutdown_requested", "error", "recovery_failed"].contains(state))
     }
 }
 
@@ -73,4 +63,45 @@ public struct GateSurgeIdentity: Codable {
     public var checkedAt = Date()
     public var checkedUptime = SystemClock.seconds
     public init() {}
+}
+
+// A timeout does not cancel an NSWorkspace request or a dedicated launcher.
+public struct GatePendingLaunch: Codable, Equatable {
+    public let id: UUID
+    public let app: String
+    public let bootId: String
+    public static var path: String { UserPaths.directory + "/pending-launch.json" }
+    public init(app: String) { id = UUID(); self.app = app; bootId = SystemClock.bootID }
+    public func complete(at path: String = path) throws {
+        if try Self.load(from: path)?.id == id { try FileManager.default.removeItem(atPath: path) }
+    }
+    public static func load(from path: String = path) throws -> GatePendingLaunch? {
+        guard let data = try UserPaths.readPrivate(path) else { return nil }
+        let value = try JSON.decode(Self.self, from: data)
+        guard GateConfiguration.validBundleID(value.app), !value.bootId.isEmpty else { throw GuardError("Invalid pending launch") }
+        return value.bootId == SystemClock.bootID ? value : nil
+    }
+}
+
+public struct GateShutdownRequest: Codable {
+    public let id: UUID
+    public let action: String
+    public let bootId: String
+    public static var path: String { UserPaths.directory + "/shutdown-request.json" }
+    public init(action: String) throws {
+        guard ["restart", "shutdown"].contains(action) else { throw GuardError("Invalid shutdown action") }
+        id = UUID(); self.action = action; bootId = SystemClock.bootID
+    }
+    public static func load(from path: String = path) throws -> GateShutdownRequest? {
+        guard let data = try UserPaths.readPrivate(path) else { return nil }
+        let value = try JSON.decode(Self.self, from: data)
+        guard ["restart", "shutdown"].contains(value.action), !value.bootId.isEmpty else { throw GuardError("Invalid shutdown request") }
+        return value.bootId == SystemClock.bootID ? value : nil
+    }
+}
+
+public enum GateShutdownPhase {
+    case idle, quitting, submitted, aborted
+    public var preservesSession: Bool { self != .idle }
+    public var canRetry: Bool { self == .submitted || self == .aborted }
 }

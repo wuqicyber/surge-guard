@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "LaunchFile.h"
 
 int main(int argc, char **argv) {
     const char *bundle = "/Applications/Surge.app";
@@ -23,6 +24,15 @@ int main(int argc, char **argv) {
         !group || group->gr_gid != gid || group->gr_mem[0] != NULL) {
         fputs("Surge launcher requires the console user and its installed dedicated group\n", stderr);
         return 1;
+    }
+    const char *parts[] = {"/Applications", "Surge.app", "Contents", "MacOS", "Surge"};
+    LaunchFile files[5];
+    for (int i = 0; i < 5; i++) {
+        if (!launch_file_open(&files[i], i == 0 ? AT_FDCWD : files[i - 1].fd, parts[i], i < 4)) {
+            while (i > 0) close(files[--i].fd);
+            fputs("Surge path is unsafe or changing; retry after the official update completes\n", stderr);
+            return 1;
+        }
     }
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)bundle, strlen(bundle), true);
     SecStaticCodeRef code = NULL;
@@ -42,10 +52,6 @@ int main(int argc, char **argv) {
     if (!account || setregid(gid, gid) != 0 || getgid() != gid || getegid() != gid) return 1;
     char *home = strdup(account->pw_dir), *name = strdup(account->pw_name);
     if (!home || !name) return 1;
-    if (check) {
-        printf("{\"uid\":%u,\"gid\":%u}\n", uid, gid);
-        return 0;
-    }
     // A fixed environment prevents the set-group launcher from accepting injected code or proxy settings.
     char *environment[5] = {NULL, NULL, NULL, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", NULL};
     if (asprintf(&environment[0], "HOME=%s", home) < 0 ||
@@ -53,6 +59,18 @@ int main(int argc, char **argv) {
         asprintf(&environment[2], "LOGNAME=%s", name) < 0 || chdir(home) != 0) return 1;
     umask(022);
     char *const args[] = {(char *)binary, NULL};
+    // shortcut: pathname exec still has a final race; user-owned Sparkle updates require a mutable bundle.
+    for (int i = 0; i < 5; i++) {
+        if (!launch_file_unchanged(&files[i], i == 0 ? AT_FDCWD : files[i - 1].fd, parts[i])) {
+            fputs("Surge changed during signature validation; launch refused\n", stderr);
+            return 1;
+        }
+    }
+    if (check) {
+        for (int i = 0; i < 5; i++) close(files[i].fd);
+        printf("{\"uid\":%u,\"gid\":%u}\n", uid, gid);
+        return 0;
+    }
     execve(binary, args, environment);
     perror("Surge launch");
     return 1;

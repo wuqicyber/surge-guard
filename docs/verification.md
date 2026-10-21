@@ -1088,3 +1088,62 @@ applications, interfaces or protocols. The test did not run a real updater.
 Actual Sparkle update/hang/cancel behavior, physical reboot/early boot, forced
 crash, IPv6, DHCP renewal and UDP enforcement remain unverified. Existing private
 captures and diagnostic records remain outside the repository.
+
+## 2026-10-20 — review fixes, non-disruptive verification
+
+Scope: installation preflight, bounded command cleanup, route resolution,
+Gate update/shutdown/service state, independent recovery, launcher path consistency,
+structured egress candidates, and conservative SwiftBar rendering.
+
+Performed:
+
+- `./scripts/check.sh` passed: standalone regression checks, release build with
+  Swift warnings treated as errors, native launcher consistency checks compiled
+  with `-Wall -Wextra -Werror`, policy validation, CLI help/log formatting, shell
+  syntax and `git diff --check`.
+- New cases cover a missing installation policy after state-directory creation;
+  unresolved/unknown/cyclic/broken route chains and a resolved but unlisted leaf;
+  timeouts with inherited output pipes and background descendants, early parent
+  exit, blocked stdin and repeated descriptor counts; strict loaded/running/absent
+  service results; a failed second emergency-service query and a waiting job;
+  boot/nonce-bound launch and shutdown records, obsolete launch completions,
+  pending-pause acknowledgement and submitted/aborted shutdown retry semantics;
+  incomplete/unknown recorder and stopped-guard menu wording; structured domain
+  JSON, query failures versus empty results, IPv6/mapped IPv4 normalization,
+  bounded candidate deduplication, raw integer virtual IPs and local DNS forwarding
+  records with null address data.
+- Native C fixtures exercise ordinary-user-owned files, no-follow opens,
+  descriptor close-on-exec, inode replacement, content/mode changes and changed
+  directory metadata. They never launch the installed app or use set-group rights.
+- An isolated fake-tools installer test confirms `--menu-only` leaves Gate intact
+  and invokes neither Gate nor the system guard. Emergency recovery fixtures use
+  fake sudo/launchctl/PF tools exclusively.
+- Ran `./scripts/install-user.sh --menu-only` as the normal user. It backed up and
+  updated the independent user menu files. The installed renderer matches the
+  release build, and its installed `--section` entry point renders both components.
+- Read-only `observe-egress --json` returned valid structured JSON with successful
+  DNS and virtual-IP queries and candidate-domain fields. Only schema/status
+  summaries were inspected; no private observations or cache contents were saved
+  in the repository. A generic `rule explain` query confirmed the current CLI's
+  selected-group schema without creating a target connection.
+- Before/after menu installation, the Surge process identity, Guard/Gate job PIDs,
+  installed Guard/Gate/launcher hashes and Gate plist hash were unchanged.
+  Surge.app and its executable retained their ordinary-user ownership, mode and
+  inode. The original untracked `package-lock.json` hash was unchanged.
+
+Not performed:
+
+- No system guard, dedicated launcher or Gate service deployment/restart; no Surge
+  quit, updater invocation, power request, or live PF mutation. PF tests used
+  parse-only `-n`; these results do not establish a live protection pass.
+- Actual Sparkle replacement, delayed NSWorkspace callbacks, daemon crashes,
+  concurrent live management commands, macOS shutdown cancellation/retry, reboot
+  and early-boot packet behavior still require separately authorized acceptance.
+  The unit/state/file fixtures do not replace those live scenarios.
+
+Residual boundaries: signature validation and pathname exec are not atomic even
+with pinned-descriptor/path metadata comparisons. Keeping the app user-writable
+preserves Sparkle compatibility, not isolation from malicious same-user writers.
+An unresolved launch left by a crashed Gate conservatively blocks recovery and
+pause acknowledgement until the app is observed or the boot changes; deleting
+its marker is not proof that the launch was cancelled.

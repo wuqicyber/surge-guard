@@ -57,7 +57,7 @@ enum SwiftBar {
         lines.append("-----")
         if state == "stopped" || state == "unlocked" {
             command("▶️ 启动并恢复防火墙保护", ["start"], root: true)
-            lines.append("-- ℹ️ 当前保护已解除，网络直接放行（点击上方或重启电脑将恢复保护）" + noteStyle)
+            lines.append("-- ℹ️ \(status.stoppedExplanation)" + noteStyle)
         } else {
             command("🔄 重启防火墙保护（连接可能短暂重连）", ["restart"], root: true)
             command("🔓 暂停保护并放行网络（应急退出，下次启动或开机恢复）", ["unlock"], root: true)
@@ -91,17 +91,18 @@ enum SwiftBar {
             }
         }
         if FileManager.default.isExecutableFile(atPath: PacketAudit.binary) {
-            let audit = PacketAuditSnapshot.read()
-            let recording = audit?.state == "capturing"
-            lines.append("-- 📦 抓包审计工具（\(recording ? "🔵 正在抓包" : "⚪️ 默认关闭，按需排障")）" + parentStyle)
-            lines.append("---- 当前状态：\(recording ? "🔵 正在抓包 · 路径未验证" : "⚪️ 已关闭（日常 0 内存占用）")" + infoStyle)
+            let service = try? Command.run("/bin/launchctl", ["print", "system/" + PacketAudit.label])
+            let audit = service.flatMap { PacketAuditSnapshot.read(service: $0) }
+            let auditMenu = PacketAuditMenu(service: service, snapshot: audit)
+            lines.append("-- 📦 抓包审计工具（\(auditMenu.title)）" + parentStyle)
+            lines.append("---- 当前状态：\(auditMenu.title)" + infoStyle)
             if let audit {
                 lines.append("---- 抓包环形容量：\(audit.capacityMegabytes) MB；Surge 请求记录：\(clean(audit.surgeRequestsState))" + noteStyle)
                 for description in audit.historyDescriptions { lines.append("---- \(description)" + noteStyle) }
                 lines.append("---- 历史缺口不会因恢复记录而清除；无缺口标记不等于完整覆盖" + noteStyle)
             }
             lines.append("---- 抓包运行不代表全部流量经 Surge；未知归属与丢包须核对" + noteStyle)
-            if recording {
+            if auditMenu.canStop {
                 command("⏹️ 停止连续抓包并关闭自启（保留历史）", ["audit-stop"], root: true, depth: "----")
             } else {
                 command("▶️ 开始连续抓包（临时验证时开启）", ["audit-start"], root: true, depth: "----")
@@ -129,8 +130,12 @@ enum SwiftBar {
                 } else { lines.append("-- Surge 身份：待重新验证" + infoStyle) }
                 if let update = report.status.update, update.paused {
                     let elapsed = max(0, Int(Date().timeIntervalSince(update.changedAt)))
-                    lines.append("-- 当前模式：已暂停自动重开 Surge（已持续 \(elapsed / 60) 分 \(elapsed % 60) 秒） | color=#92400E,#FCD34D size=12")
-                    lines.append("-- 说明：现在可手动退出或升级 Surge；完成后请点击下方「恢复自动重开」" + noteStyle)
+                    lines.append("-- 当前模式：\(report.status.state == "update_paused" ? "已暂停自动重开 Surge" : "请求暂停，等待确认")（已持续 \(elapsed / 60) 分 \(elapsed % 60) 秒） | color=#92400E,#FCD34D size=12")
+                    if report.status.state == "update_paused" {
+                        lines.append("-- 说明：已确认暂停，可手动退出或升级 Surge；完成后点击「恢复自动重开」" + noteStyle)
+                    } else {
+                        lines.append("-- 暂停请求尚未确认，暂勿开始升级：\(clean(report.status.message ?? "等待在途操作结束"))" + noteStyle)
+                    }
                 } else if ["waiting_identity", "recovery_failed", "error"].contains(report.status.state),
                           let message = report.status.message {
                     lines.append("-- 原因：\(clean(message)) | color=#92400E,#FCD34D size=12")

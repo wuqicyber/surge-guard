@@ -11,72 +11,131 @@ public struct CommandResult {
 }
 
 public enum Command {
-    // Fixed system tools only in privileged paths; no shell interpolation.
-    // Drain output concurrently so a full pipe cannot deadlock the timeout.
+    // Own the child group and keep its leader unreaped until cleanup, so its PID cannot be reused.
     public static func run(_ executable: String, _ arguments: [String],
                            input: String? = nil, timeout: TimeInterval = 2) throws -> CommandResult {
-        guard (input?.utf8.count ?? 0) < 16_384 else { throw GuardError("Command input is too large") }
+        guard (input?.utf8.count ?? 0) < 16_384, timeout.isFinite, timeout > 0 else {
+            throw GuardError("Invalid command input or timeout")
+        }
         let invocation = ([executable] + arguments).joined(separator: " ")
-        let task = Process(), outputPipe = Pipe(), errorPipe = Pipe(), inputPipe = Pipe()
-        // Close unused stdin pipes too; long-running callers cannot rely on autorelease.
+        let output = Pipe(), errors = Pipe(), stdin = Pipe()
+        let handles = [output.fileHandleForReading, output.fileHandleForWriting,
+                       errors.fileHandleForReading, errors.fileHandleForWriting,
+                       stdin.fileHandleForReading, stdin.fileHandleForWriting]
+        defer { handles.forEach { try? $0.close() } }
+        let outFD = output.fileHandleForReading.fileDescriptor
+        let errFD = errors.fileHandleForReading.fileDescriptor
+        let inFD = stdin.fileHandleForWriting.fileDescriptor
+        for fd in [outFD, errFD, inFD] {
+            guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else {
+                throw GuardError("Cannot configure command pipe")
+            }
+        }
+        guard fcntl(inFD, F_SETNOSIGPIPE, 1) == 0 else { throw GuardError("Cannot protect command stdin") }
+        var actions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+        guard posix_spawn_file_actions_init(&actions) == 0 else { throw GuardError("Cannot prepare command file actions") }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        guard posix_spawnattr_init(&attributes) == 0 else { throw GuardError("Cannot prepare command attributes") }
+        defer { posix_spawnattr_destroy(&attributes) }
+        func require(_ code: Int32) throws {
+            guard code == 0 else { throw GuardError("Cannot prepare command: errno \(code)") }
+        }
+        var mask = sigset_t(), defaults = sigset_t()
+        sigemptyset(&mask)
+        sigfillset(&defaults)
+        sigdelset(&defaults, SIGKILL); sigdelset(&defaults, SIGSTOP)
+        try require(posix_spawnattr_setsigmask(&attributes, &mask))
+        try require(posix_spawnattr_setsigdefault(&attributes, &defaults))
+        try require(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)))
+        try require(posix_spawnattr_setpgroup(&attributes, 0))
+        if input != nil {
+            try require(posix_spawn_file_actions_adddup2(&actions, stdin.fileHandleForReading.fileDescriptor, STDIN_FILENO))
+        } else { try require(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)) }
+        try require(posix_spawn_file_actions_adddup2(&actions, output.fileHandleForWriting.fileDescriptor, STDOUT_FILENO))
+        try require(posix_spawn_file_actions_adddup2(&actions, errors.fileHandleForWriting.fileDescriptor, STDERR_FILENO))
+        let argv = ([executable] + arguments).map { strdup($0) } + [nil]
+        let environment: [String] = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "LANG=C"]
+        let env = environment.map { strdup($0) } + [nil]
+        defer { (argv + env).forEach { free($0) } }
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, executable, &actions, &attributes, argv, env)
+        guard spawned == 0 else { throw GuardError("Cannot launch \(invocation): errno \(spawned)") }
         defer {
-            try? inputPipe.fileHandleForReading.close()
-            try? inputPipe.fileHandleForWriting.close()
-            try? outputPipe.fileHandleForWriting.close()
-            try? errorPipe.fileHandleForWriting.close()
-        }
-        let finished = DispatchSemaphore(value: 0), drained = DispatchGroup()
-        final class Capture: @unchecked Sendable { var bytes = Data(); var overflow = false }
-        let capture = Capture(), errors = Capture()
-        task.executableURL = URL(fileURLWithPath: executable)
-        task.arguments = arguments
-        task.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "LANG": "C"]
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
-        task.standardInput = input == nil ? FileHandle.nullDevice : inputPipe.fileHandleForReading
-        task.terminationHandler = { _ in finished.signal() }
-        do { try task.run() }
-        catch {
-            try? outputPipe.fileHandleForReading.close()
-            try? errorPipe.fileHandleForReading.close()
-            throw error
-        }
-        outputPipe.fileHandleForWriting.closeFile()
-        errorPipe.fileHandleForWriting.closeFile()
-        for (pipe, destination) in [(outputPipe, capture), (errorPipe, errors)] {
-            drained.enter()
-            DispatchQueue.global().async {
-                defer { try? pipe.fileHandleForReading.close(); drained.leave() }
-                while true {
-                    let data = pipe.fileHandleForReading.availableData
-                    if data.isEmpty { break }
-                    if destination.bytes.count + data.count <= 1_048_576 { destination.bytes.append(data) }
-                    else { destination.overflow = true }
+            kill(-pid, SIGKILL)
+            kill(pid, SIGKILL)
+            var status: Int32 = 0
+            let deadline = SystemClock.seconds + 1
+            var reaped = false
+            repeat {
+                let result = waitpid(pid, &status, WNOHANG)
+                if result == pid || (result < 0 && errno == ECHILD) { reaped = true; break }
+                usleep(1_000)
+            } while SystemClock.seconds < deadline
+            if !reaped {
+                // A kernel-stalled child must not hold command pipes or the caller indefinitely.
+                let child = pid
+                DispatchQueue.global(qos: .utility).async {
+                    var status: Int32 = 0
+                    while waitpid(child, &status, 0) < 0 && errno == EINTR {}
                 }
             }
         }
-        if let input {
-            do {
-                try inputPipe.fileHandleForWriting.write(contentsOf: Data(input.utf8))
-                try inputPipe.fileHandleForWriting.close()
-            } catch {
-                kill(task.processIdentifier, SIGKILL)
-                throw GuardError("Cannot write command input: \(error)")
+        try output.fileHandleForWriting.close()
+        try errors.fileHandleForWriting.close()
+        try stdin.fileHandleForReading.close()
+        let inputBytes = Data((input ?? "").utf8)
+        var written = 0, inputClosed = false
+        var captures = [Data(), Data()], eof = [false, false]
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        let deadline = SystemClock.seconds + timeout
+        var exitedAt: Double?
+        var exitStatus: Int32?
+        while true {
+            for (index, fd) in [outFD, errFD].enumerated() where !eof[index] {
+                for _ in 0..<8 {
+                    let count = Darwin.read(fd, &buffer, buffer.count)
+                    if count == 0 { eof[index] = true; break }
+                    if count < 0 {
+                        if errno == EINTR { continue }
+                        guard errno == EAGAIN || errno == EWOULDBLOCK else { throw GuardError("Cannot read \(invocation) output: errno \(errno)") }
+                        break
+                    }
+                    guard captures[index].count + count <= 1_048_576 else { throw GuardError("\(invocation) output exceeded limits") }
+                    captures[index].append(contentsOf: buffer.prefix(count))
+                }
             }
-        }
-        if finished.wait(timeout: .now() + timeout) != .success {
-            kill(task.processIdentifier, SIGKILL)
-            guard finished.wait(timeout: .now() + 1) == .success else {
-                throw GuardError("\(invocation) timed out after \(timeout)s and did not terminate")
+            if !inputClosed {
+                if written < inputBytes.count {
+                    let count = inputBytes.withUnsafeBytes { Darwin.write(inFD, $0.baseAddress!.advanced(by: written), inputBytes.count - written) }
+                    if count > 0 { written += count }
+                    else if count < 0, errno != EAGAIN, errno != EWOULDBLOCK, errno != EINTR {
+                        throw GuardError("Cannot write \(invocation) input: errno \(errno)")
+                    }
+                }
+                if written == inputBytes.count { try stdin.fileHandleForWriting.close(); inputClosed = true }
             }
-            throw GuardError("\(invocation) timed out after \(timeout)s")
+            if exitStatus == nil {
+                var info = siginfo_t()
+                let result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+                guard result == 0 || errno == EINTR else { throw GuardError("Cannot inspect \(invocation) child: errno \(errno)") }
+                if result == 0, info.si_pid == pid {
+                    exitedAt = SystemClock.seconds
+                    exitStatus = info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status
+                }
+            }
+            if let exitStatus, eof.allSatisfy({ $0 }) {
+                return CommandResult(status: exitStatus, output: String(decoding: captures[0], as: UTF8.self),
+                                     diagnostics: String(decoding: captures[1], as: UTF8.self))
+            }
+            let now = SystemClock.seconds
+            guard now < deadline else { throw GuardError("\(invocation) timed out after \(timeout)s") }
+            if let exitedAt, now - exitedAt >= 1 { throw GuardError("\(invocation) output pipes did not close") }
+            var descriptors = [pollfd(fd: eof[0] ? -1 : outFD, events: Int16(POLLIN), revents: 0),
+                               pollfd(fd: eof[1] ? -1 : errFD, events: Int16(POLLIN), revents: 0),
+                               pollfd(fd: inputClosed ? -1 : inFD, events: Int16(POLLOUT), revents: 0)]
+            _ = poll(&descriptors, nfds_t(descriptors.count), 10)
         }
-        guard drained.wait(timeout: .now() + 1) == .success, !capture.overflow, !errors.overflow else {
-            throw GuardError("\(invocation) output exceeded limits")
-        }
-        return CommandResult(status: task.terminationStatus,
-                             output: String(decoding: capture.bytes, as: UTF8.self),
-                             diagnostics: String(decoding: errors.bytes, as: UTF8.self))
     }
 
     @discardableResult

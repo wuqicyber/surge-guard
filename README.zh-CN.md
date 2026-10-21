@@ -20,6 +20,12 @@ PF；它仍是实验性外部门禁，不能证明每个数据包都不可绕过
 公网发送线索优先保留。采样记录关联开始、结束门禁状态；期间发生切换时明确标为混合区间，
 不会把整段字节按结束状态判作已放行或已阻断。手动或旧版记录未跟踪切换时明确显示未知。每次最多记录
 20 条新证据，沿用每组件当前/上一份各 1 MiB 的日志轮转。每五分钟保留观测摘要和覆盖缺口，
+普通用户 `observe-egress` 的文字与 JSON 输出都使用结构化 `flows[].candidate_domains`，
+每条 socket 最多五个去重候选域名；IP 匹配规范化 IPv6 写法及 IPv4-mapped IPv6。
+虚拟 IP 同时兼容原始 `d`／整数 `i` 和导出 `domain`／`IP` 格式。
+`domain_queries` 分别记录 DNS 与虚拟 IP 查询的 `ok`、`empty`、`failed`（附原始错误）或
+`unavailable`；后台守护标为 `not_requested`，root 不执行用户所有的 Surge CLI。
+候选域名仅是缓存线索，不是该连接请求域名或实际路径的确认。
 采样失败/恢复单独记录。SwiftBar 的“查看连接采样（只读）”可立即查看。
 更新用户菜单只增加手动检查；后台持续记录需要安装新版系统守护。
 
@@ -72,12 +78,19 @@ IPv6 的 VIF 例外，也不提供 Tailscale、其他 VPN 或局域网例外。�
 
 暂停保存在私有 `update-mode.json`，跨 Gate 重启和电脑重启保留；损坏或读失败时暂停
 自动操作并报告错误。确认超时仍保留请求，不能开始更新。已有退出/启动操作须完成后才
-确认暂停；暂停期间拒绝有序关机请求。真实恢复失败执行 30 秒退避；单纯等待 Guard
+确认暂停；暂停期间拒绝有序关机请求。启动超时不会取消 NSWorkspace 请求或专用启动器，
+`pending-launch.json` 会跨 Gate 重启保留在途状态；回调结束、确认应用启动或启动器退出后才
+确认暂停。Gate 崩溃后无法确认完成时，自动恢复与暂停确认保持阻塞，直到应用出现或重启电脑
+使旧 boot 请求失效；手工删除标记不能视为取消了启动请求。真实恢复失败执行 30 秒退避；单纯等待 Guard
 确认阻断不占用退避。每次身份修复只发送一次正常退出请求，不强制终止。
 
 安装器创建无普通成员的 `_surge_guard` 组，并安装 root 所有、模式为 `2755` 的固定
-`surge-guard-launch`。它仅改变有效组，不赋予 root 用户身份，只能运行签名验证通过的
-官方 Surge。普通用户执行该启动器的 `--check` 可以只读核对 UID/GID 和签名。
+`surge-guard-launch`。它设置专用 real/effective GID，不赋予 root 用户身份；验证官方 Surge 签名后执行固定路径。普通用户执行该启动器的 `--check` 可以只读核对 UID/GID 和签名。
+启动器以不跟随符号链接的方式打开各级目录和可执行文件，在签名验证前后对照
+`fstat` / `lstat` 等价信息中的设备、inode、属主、权限、大小及修改时间，发现替换或修改就拒绝启动。
+`/Applications/Surge.app` 保留普通用户属主及原有可写权限，以兼容应用内 Sparkle 自动更新。
+这些检查缩小了竞态窗口，但签名验证与按路径 `execve` 仍非原子操作；最后一次检查至执行的
+窗口，以及同用户恶意进程对应用包的写入，不属于当前启动器能完全防御的边界。
 SurgeGate 会在确认阻断后，以正常退出方式纠正 Surge 的错误启动身份，再调用启动器；
 退出被拒绝或超时就保持错误状态，不强制终止，也不退回普通身份放行。
 
@@ -103,7 +116,7 @@ SurgeGate 会在确认阻断后，以正常退出方式纠正 Surge 的错误启
 | 组件 | 可执行文件 / Launchd 标签 | 状态与配置文件 | 常用命令与应急操作 |
 | --- | --- | --- | --- |
 | **surge-guard**（Root 防火墙门禁） | `/Library/PrivilegedHelperTools/surge-guard`<br>`system/io.github.surge-guard` | 策略：`/Library/Application Support/SurgeGuard/policy.json`<br>状态：`/Library/Application Support/SurgeGuard/status.json`<br>日志：`/private/var/db/surge-guard/events.log` | **应急暂停保护并放行网络**：`sudo /Library/PrivilegedHelperTools/surge-guard unlock`<br>**重新启用保护**：`sudo /Library/PrivilegedHelperTools/surge-guard start`<br>**只读查看非 Surge 连接与候选域名**：`surge-guard observe-egress` |
-| **surge-guard-launch**（专用组启动器） | `/Library/PrivilegedHelperTools/surge-guard-launch`（`root:_surge_guard`，权限 `2755`） | 专用组记录：`/private/var/db/surge-guard/dedicated-group.json`（GID `60000...60999`） | **只读校验 UID/GID 与 Surge 签名**：`/Library/PrivilegedHelperTools/surge-guard-launch --check` |
+| **surge-guard-launch**（专用组启动器） | `/Library/PrivilegedHelperTools/surge-guard-launch`（`root:_surge_guard`，权限 `2755`） | 专用组记录：`/private/var/db/surge-guard/egress-group.json`（GID `60000...60999`） | **只读校验 UID/GID 与 Surge 签名**：`/Library/PrivilegedHelperTools/surge-guard-launch --check` |
 | **surge-gate**（用户态伴随服务） | `~/Library/Application Support/SurgeGuard/bin/surge-gate`<br>`gui/$UID/io.github.surge-guard.gate` | 配置：`~/Library/Application Support/SurgeGuard/gate.json`<br>状态：`~/Library/Application Support/SurgeGuard/gate-status.json`<br>更新模式：`~/Library/Application Support/SurgeGuard/update-mode.json` | **手动退出或升级 Surge 前暂停自动重开**：`surge-gate update-pause`<br>**升级或维护完成后恢复**：`surge-gate update-resume`<br>**停止/启动服务（不影响当前联网与 PF）**：`surge-gate stop` / `surge-gate start`<br>**有序重启/关机（保存会话并安全断网）**：`surge-gate shutdown --action restart\|shutdown` |
 | **surge-guard-audit**（按需抓包审计，默认关闭） | `/Library/PrivilegedHelperTools/surge-guard-audit`<br>`system/io.github.surge-guard.audit` | 目录：`/private/var/db/surge-guard/packet-audit/` | **临时开启连续抓包**：`sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-start`<br>**停止抓包并禁用开机自启**：`sudo /Library/PrivilegedHelperTools/surge-guard-audit audit-stop` |
 
@@ -160,7 +173,8 @@ cp examples/routes.json policy.local.json
 组内更换代理节点不需要修改门禁配置。如果还要限制最终节点，可以额外填写
 `"allowed_final_policies": ["Residential A", "Residential B"]`；已有白名单仍然有效。
 显式填写空数组或 null 会被拒绝。两种配置都拒绝 DIRECT/REJECT、错误策略组、无效配置及查询失败／过期；
-填写了白名单时，还会拒绝不在名单内的节点。
+填写了白名单时，还会拒绝不在名单内的节点。组选择链必须连续、无环并终止于已识别的代理类型；
+缺失 selected、未解析组或未知最终类型均保持阻断。
 不会根据名称中“包含美国”等文字猜测节点属性，也不进行出口 IP 或网站连通性探测。
 配置 URL 使用默认请求上下文；实际应用的进程、协议或 URL 特定规则可能影响结果。
 
@@ -247,6 +261,9 @@ scripts/install-user.sh
 scripts/install-user.sh --menu-only
 ```
 
+`--menu-only` 与 `--recovery-only` 都只更新独立菜单文件，不查询或重启 Guard/Gate，
+也不替换 Gate 可执行文件。需要安装／升级伴随服务时，另行执行
+`.build/release/surge-gate install`，该命令会重启用户服务。
 再将控制中心中旧的 Surge 渲染逻辑替换为：
 
 ```sh
@@ -254,7 +271,9 @@ scripts/install-user.sh --menu-only
 ```
 
 菜单区分放行、阻断、手动解除、停止和未知；展示检查时间、规则结果、具体原因、SurgeGate
-状态，并提供日志、诊断、规则草稿、重启和临时恢复入口。采用系统文字颜色和明暗双配色。
+状态，并提供日志、诊断、规则草稿、重启和临时恢复入口。
+守护停止不代表遗留 PF 规则已清除；抓包状态缺失、过期或不完整时显示不确定，服务可能仍在运行时
+保留停止入口，不推断“已关闭、零内存”。采用系统文字颜色和明暗双配色。
 菜单显示名为 `surge-guard` 和 `surge-gate`。surge-gate 只有在服务运行、状态新鲜、已就绪、无待恢复应用且系统门禁
 已验证放行时才显示绿色；等待／过期为橙色，错误为红色。
 
@@ -287,11 +306,15 @@ SwiftBar → **SurgeGate** 菜单最上方是电源操作：蓝色“有序重�
 # 或 --action shutdown
 ```
 
-请求交由独立的用户服务处理，退出调用终端不会截断流程。
+请求先在锁内写入，再启动尚未运行的服务，避免服务先恢复应用再看到关机请求；并发请求不会相互覆盖。
+服务查询失败按错误处理，不视为“未安装”。请求交由独立的用户服务处理，退出调用终端不会截断流程。
 先保存会话，正常请求应用退出，确认后最后退出 Surge，验证 PF 已阻断，再请求 macOS 关机。
 有未保存内容时由应用显示正常提示，拒绝／超时就中止；不使用 SIGKILL、宽泛 pkill，
 也不修改系统全局恢复设置。最后一步可能需要系统自动化权限。
 它不拦截所有 Apple 菜单关机、断电或内核故障。
+macOS 接受 Apple event 只表示已提交，系统或其他应用仍可能取消关机。提交后及中止后都保留会话，
+暂停快照与自动恢复；可以再次显式发起有序关机／重启，已退出应用仍保留在会话中，
+也可重启 Gate 恢复自动运行。应用仍在退出阶段时拒绝重复请求。
 
 关机后再开机，系统级守护由 LaunchDaemon 自动加载；登录用户账户后，SurgeGate 的
 `RunAtLoad`／`KeepAlive` LaunchAgent 自动运行，启动 Surge，等待系统门禁放行后恢复应用。

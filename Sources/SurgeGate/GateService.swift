@@ -25,14 +25,43 @@ func appIDs(_ config: GateConfiguration) throws -> [String] {
     return Array(Set(try applications().compactMap(\.bundleIdentifier))).filter { !excluded.contains($0) }.sorted()
 }
 
+var workspaceLaunches = Set<UUID>()
+
+func launchSettled() throws -> Bool {
+    guard let request = try GatePendingLaunch.load() else { return true }
+    guard !workspaceLaunches.contains(request.id) else { return false }
+    if request.app == "com.nssurge.surge-mac" {
+        let identity = surgeIdentity()
+        if identity.pid != nil, identity.verified || identity.reason == "dedicated_group_not_required" {
+            try request.complete(); return true
+        }
+        if let task = surgeLaunchProcess, !task.isRunning {
+            try request.complete(); return true
+        }
+    } else if NSRunningApplication.runningApplications(withBundleIdentifier: request.app).contains(where: { !$0.isTerminated }) {
+        try request.complete(); return true
+    }
+    // A previous Gate may have died before the callback; absence of an app is not cancellation.
+    return false
+}
+
 @discardableResult func launch(_ id: String) throws -> Bool {
     if NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { !$0.isTerminated }) { return false }
     guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { throw GuardError("Application is not installed") }
     let config = NSWorkspace.OpenConfiguration()
     config.activates = false
+    let request = GatePendingLaunch(app: id)
+    try UserPaths.write(try JSON.encode(request), to: GatePendingLaunch.path)
+    workspaceLaunches.insert(request.id)
     var result: Result<Void, Error>?
     NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
-        DispatchQueue.main.async { result = error.map { .failure($0) } ?? .success(()) }
+        DispatchQueue.main.async {
+            workspaceLaunches.remove(request.id)
+            do {
+                try request.complete()
+                result = error.map { .failure($0) } ?? .success(())
+            } catch { result = .failure(error) }
+        }
     }
     let deadline = SystemClock.seconds + 10
     while result == nil && SystemClock.seconds < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
@@ -90,13 +119,19 @@ func ensureSurge(quitTimeout: Double) throws -> SurgeLaunchResult {
     task.standardInput = FileHandle.nullDevice
     task.standardOutput = FileHandle.nullDevice
     task.standardError = FileHandle.nullDevice
-    try task.run()
+    let request = GatePendingLaunch(app: "com.nssurge.surge-mac")
+    try UserPaths.write(try JSON.encode(request), to: GatePendingLaunch.path)
+    do { try task.run() }
+    catch { try request.complete(); throw error }
     surgeLaunchProcess = task
     let deadline = SystemClock.seconds + 10
     while SystemClock.seconds < deadline {
         if let pid = try Probe.trustedSurgePID(),
-           try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group) { return .launched }
-        guard task.isRunning else { throw GuardError("Dedicated Surge launcher exited with status \(task.terminationStatus)") }
+           try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group) { try request.complete(); return .launched }
+        guard task.isRunning else {
+            try request.complete()
+            throw GuardError("Dedicated Surge launcher exited with status \(task.terminationStatus)")
+        }
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
     throw GuardError("Dedicated Surge startup timed out; networking remains gated")
@@ -125,21 +160,24 @@ func readStatus() throws -> (status: GateStatus, running: Bool, fresh: Bool) {
         return (GateStatus(state: running ? "waiting" : "stopped", message: running ? "Initializing" : "Service is not running", pending: []), running, false)
     }
     let status = try JSON.decode(GateStatus.self, from: Data(contentsOf: URL(fileURLWithPath: UserPaths.status)))
-    let running = try StatusReport.serviceRunning(service, pid: status.pid)
-    let fresh = running && status.bootId == SystemClock.bootID && SystemClock.seconds >= status.checkedUptime &&
+    let running = try StatusReport.serviceRunning(service)
+    let fresh = try StatusReport.serviceRunning(service, pid: status.pid) && !status.bootId.isEmpty && status.bootId == SystemClock.bootID && SystemClock.seconds >= status.checkedUptime &&
         SystemClock.seconds - status.checkedUptime < 15
     return (status, running, fresh)
 }
 
 func updateMode(paused: Bool) throws {
-    let fd = try lock("update-command.lock")
-    defer { close(fd) }
-    let previous = try readStatus()
-    guard previous.fresh, previous.status.state != "shutting_down" else {
-        throw GuardError("SurgeGate must be running with fresh status and not shutting down")
-    }
+    let fd = try lock("request.lock")
     let update = GateUpdate(paused: paused)
-    try UserPaths.write(try JSON.encode(update), to: GateUpdate.path)
+    do {
+        defer { close(fd) }
+        let previous = try readStatus()
+        guard previous.fresh, !["shutting_down", "shutdown_requested"].contains(previous.status.state),
+              try GateShutdownRequest.load() == nil else {
+            throw GuardError("SurgeGate must be running with fresh status and no ordered shutdown")
+        }
+        try UserPaths.write(try JSON.encode(update), to: GateUpdate.path)
+    }
     let deadline = SystemClock.seconds + 20
     while SystemClock.seconds < deadline {
         let report = try readStatus()
@@ -157,19 +195,24 @@ func lock(_ name: String, timeout: TimeInterval = 0) throws -> Int32 {
     try UserPaths.prepare()
     let fd = open(UserPaths.directory + "/" + name, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard fd >= 0 else { throw GuardError("Cannot open gate lock") }
-    do { try RuntimeLock.acquire(fd, timeout: timeout) }
+    do {
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG,
+              info.st_mode & 0o077 == 0 else { throw GuardError("Unsafe gate lock") }
+        try RuntimeLock.acquire(fd, timeout: timeout)
+    }
     catch { close(fd); throw GuardError("SurgeGate lock \(name): \(error)") }
     return fd
 }
 
 func saveSession(_ config: GateConfiguration, pending: [String], preserveSavedApps: Bool = false) throws {
-    let existing = preserveSavedApps ? ((try? GateSession.load().apps) ?? []) : []
+    let existing = preserveSavedApps ? try GateSession.load().apps : []
     let excluded = Set(config.excludedApps + ["com.apple.finder", "com.nssurge.surge-mac"])
     let apps = Array(Set(try appIDs(config) + existing)).filter { !excluded.contains($0) }.sorted()
     try UserPaths.write(try JSON.encode(GateSession(apps: apps, pending: pending)), to: UserPaths.session)
 }
 
-let shutdownPath = UserPaths.directory + "/shutdown-request.json"
+let shutdownPath = GateShutdownRequest.path
 
 func shutdown(_ action: String, config: GateConfiguration, pending: [String], preserveSavedApps: Bool = false) throws {
     guard ["restart", "shutdown"].contains(action) else { throw GuardError("Invalid shutdown action") }
@@ -221,7 +264,7 @@ func run() throws {
     var nextLaunch: Double = 0
     var surgeRetry = GateRetry()
     var lastUpdate: GateUpdate?
-    var shutdownAccepted = false
+    var shutdownPhase = GateShutdownPhase.idle
     var shutdownFailure: String?
     event("gate_started", "Waiting for fresh verified system guard status")
     while true {
@@ -233,26 +276,42 @@ func run() throws {
                 lastUpdate = update
                 if let update { event(update.paused ? "update_paused" : "update_resumed", update.reason) }
             }
-            if FileManager.default.fileExists(atPath: shutdownPath), (!shutdownAccepted || shutdownFailure != nil) {
-                let request = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: shutdownPath))) as? [String: String]
-                try FileManager.default.removeItem(atPath: shutdownPath)
-                guard update?.paused != true else { throw GuardError("Shutdown request declined while Surge update is paused") }
-                guard let action = request?["action"], let requested = request?["boot_id"], requested == SystemClock.bootID else {
-                    throw GuardError("Discarded invalid/previous-boot shutdown request")
+            if !(try launchSettled()) {
+                try publish(update?.paused == true ? "update_pausing" : "launch_pending",
+                            "An earlier launch has not settled; update pause is not yet acknowledged. Wait for its completion; after a Gate crash, wait for the app to appear or reboot before maintenance.",
+                            pending: pending, update: update)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                continue
+            }
+            // Submission and consumption share a short lock; command waiters do not hold it.
+            let requestLock = try lock("request.lock")
+            let request: GateShutdownRequest?
+            let preserve = shutdownPhase.preservesSession
+            do {
+                defer { close(requestLock) }
+                request = try GateShutdownRequest.load()
+                if request != nil {
+                    guard try GateUpdate.load()?.paused != true else { throw GuardError("Shutdown request declined while Surge update is paused") }
+                    guard shutdownPhase == .idle || shutdownPhase.canRetry else { throw GuardError("Ordered shutdown is still in progress") }
+                    try publish("shutting_down", "Waiting for applications to quit", pending: pending)
+                    try FileManager.default.removeItem(atPath: shutdownPath)
                 }
-                let retryingAborted = shutdownFailure != nil
+            }
+            if let request {
                 shutdownFailure = nil
-                try publish("shutting_down", "Waiting for applications to quit", pending: pending)
-                shutdownAccepted = true
-                do { try shutdown(action, config: config, pending: pending, preserveSavedApps: retryingAborted) }
-                catch {
+                shutdownPhase = .quitting
+                do {
+                    try shutdown(request.action, config: config, pending: pending, preserveSavedApps: preserve)
+                    shutdownPhase = .submitted
+                } catch {
+                    shutdownPhase = .aborted
                     shutdownFailure = "\(error). Session retained; save documents and retry ordered shutdown, or restart SurgeGate to resume recovery"
                     event("shutdown_aborted", shutdownFailure!)
                 }
             }
-            if shutdownAccepted {
-                try publish(shutdownFailure == nil ? "shutting_down" : "error",
-                            shutdownFailure ?? "macOS shutdown requested; snapshots paused", pending: pending)
+            if shutdownPhase.preservesSession {
+                try publish(shutdownFailure == nil ? "shutdown_requested" : "error",
+                            shutdownFailure ?? "macOS request submitted, completion is not confirmed. If cancelled, retry ordered shutdown or restart Gate to resume recovery; snapshots remain paused", pending: pending)
             } else if update?.paused == true {
                 try publish("update_paused", update!.reason, pending: pending, surge: surgeIdentity(), update: update)
             } else {
@@ -280,7 +339,7 @@ func run() throws {
                     identity = surgeIdentity()
                 }
                 // A pause arriving during a bounded operation is acknowledged only after that operation settles.
-                if try GateUpdate.load()?.paused == true { continue }
+                if try GateUpdate.load()?.paused == true || !(try launchSettled()) { continue }
                 if status.state == "allowed", let target = pending.first, SystemClock.seconds >= nextLaunch {
                     switch Result(catching: { try launch(target) }) {
                     case .success(let requestedLaunch):

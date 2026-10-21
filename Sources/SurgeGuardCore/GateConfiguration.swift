@@ -20,6 +20,22 @@ public enum UserPaths {
               info.st_mode & 0o022 == 0 else { throw GuardError("Unsafe user state directory") }
     }
 
+    public static func readPrivate(_ path: String, maximumBytes: Int64 = 4096) throws -> Data? {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        if fd < 0, errno == ENOENT { return nil }
+        guard fd >= 0 else { throw GuardError("Cannot read private Gate state: errno \(errno)") }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? file.close() }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG,
+              info.st_mode & 0o077 == 0, info.st_size >= 0, info.st_size <= maximumBytes else {
+            throw GuardError("Unsafe or oversized private Gate state")
+        }
+        let data = try file.read(upToCount: Int(maximumBytes) + 1) ?? Data()
+        guard data.count <= maximumBytes else { throw GuardError("Gate state grew beyond its size limit") }
+        return data
+    }
+
     public static func write(_ text: String, to path: String) throws {
         try prepare()
         guard URL(fileURLWithPath: path).deletingLastPathComponent().path == directory else {
@@ -131,6 +147,9 @@ public struct GateStatusReport: Decodable {
         case "restoring": return "🟠 恢复应用中（\(status.pending.count) 个待恢复）"
         case "waiting": return "🟠 等待网络门禁"
         case "waiting_identity": return "🟠 等待阻断以修复身份"
+        case "update_pausing": return "🟠 暂停确认中 · 等待启动请求结束"
+        case "launch_pending": return "🟠 启动请求尚未结束"
+        case "shutdown_requested": return "🟠 已提交电源请求 · 系统取消后可重试"
         case "update_paused": return "🟠 已暂停自动重开 Surge"
         case "recovery_failed": return "🔴 Surge 恢复失败 · 等待重试"
         case "unknown": return "🟠 门禁状态读取异常"

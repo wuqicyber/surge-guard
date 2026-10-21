@@ -65,6 +65,11 @@ public struct StatusReport: Codable {
         daemonRunning && ["allowed", "blocked"].contains(state) && snapshot?.fresh() == true
     }
 
+    public var stoppedExplanation: String {
+        state == "unlocked" ? "已记录本次启动期间的手动解除保护；当前 PF 规则需重新核验" :
+            "守护已停止；遗留 PF 规则和当前联网状态未经核验"
+    }
+
     public static func read() -> StatusReport {
         let service: CommandResult
         let serviceRunning: Bool
@@ -93,13 +98,21 @@ public struct StatusReport: Codable {
         }
     }
 
+    public static func serviceLoaded(_ service: CommandResult) throws -> Bool {
+        _ = try serviceRunning(service)
+        return service.status == 0
+    }
+
     public static func serviceRunning(_ service: CommandResult, pid: Int32? = nil) throws -> Bool {
         guard service.status == 0 else {
             if service.status == 113 && service.combined.contains("Could not find service") { return false }
             throw GuardError("launchctl status \(service.status): \(service.combined.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let lines = service.output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-        return lines.contains("state = running") && (pid.map { lines.contains("pid = \($0)") } ?? true)
+        guard lines.contains("state = running") else { return false }
+        let pids = lines.filter { $0.hasPrefix("pid = ") }.compactMap { Int32($0.dropFirst(6)) }
+        guard pids.count == 1, pids[0] > 0 else { throw GuardError("Running service has no unique valid PID") }
+        return pid.map { $0 == pids[0] } ?? true
     }
 
     private static func readUnlockMarker() throws -> String {

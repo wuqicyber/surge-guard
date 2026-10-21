@@ -13,6 +13,7 @@ public struct EgressFlow: Codable, Equatable {
     public var remoteEndpoint: String
     public var sentBytes: UInt64
     public var receivedBytes: UInt64
+    public var candidateDomains: [String]?
 
     public var key: String { "\(pid)|\(interface)|\(transport)|\(localEndpoint)|\(remoteEndpoint)" }
 
@@ -23,6 +24,12 @@ public struct EgressFlow: Codable, Equatable {
         if scope == "public" { return sent > 0 ? "public_send_review" : "public_receive_only" }
         return scope == "local_or_reserved" ? "local_or_reserved" : "unresolved_peer"
     }
+}
+
+public struct EgressDomainQuery: Codable, Equatable {
+    public var status: String
+    public var error: String?
+    public init(status: String, error: String? = nil) { self.status = status; self.error = error }
 }
 
 public struct EgressObservation: Codable {
@@ -42,6 +49,39 @@ public struct EgressObservation: Codable {
     public var unattributedActiveSockets = 0
     public var unmeasuredSockets = 0
     public var flows: [EgressFlow] = []
+    public var domainQueries: [String: EgressDomainQuery]? = ["dns": .init(status: "not_requested"), "virtual_ip": .init(status: "not_requested")]
+
+    public mutating func enrichDomains(query: (_ source: String) throws -> Data) {
+        domainQueries = [:]
+        var domains: [String: Set<String>] = [:]
+        for source in ["dns", "virtual_ip"] {
+            do {
+                let parsed = try Self.parseSurgeDomains(query(source), source: source)
+                domainQueries?[source] = .init(status: parsed.isEmpty ? "empty" : "ok")
+                for (ip, names) in parsed { domains[ip, default: []].formUnion(names) }
+            } catch { domainQueries?[source] = .init(status: "failed", error: String(describing: error)) }
+        }
+        for index in flows.indices {
+            let host = Self.endpointHost(flows[index].remoteEndpoint)
+            flows[index].candidateDomains = host.flatMap { domains[$0] }.map { Array($0.sorted().prefix(5)) } ?? []
+        }
+    }
+
+    public mutating func querySurgeDomains() {
+        do {
+            guard geteuid() != 0, getuid() == (try Probe.consoleUID()),
+                  FileManager.default.isExecutableFile(atPath: Probe.surgeCLI), try Probe.trustedSurgePID() != nil else {
+                throw GuardError("Domain queries require the console user and a verified running Surge")
+            }
+            enrichDomains { source in
+                Data(try Command.checked(Probe.surgeCLI, ["--raw", "dump", source == "dns" ? "dns" : "virtual-ip-db"], timeout: 2).utf8)
+            }
+        } catch {
+            for index in flows.indices { flows[index].candidateDomains = nil }
+            domainQueries = ["dns": .init(status: "unavailable", error: String(describing: error)),
+                             "virtual_ip": .init(status: "unavailable", error: String(describing: error))]
+        }
+    }
 
     public static func collect() throws -> EgressObservation {
         let startedAt = Date(), startedUptime = SystemClock.seconds
@@ -159,50 +199,74 @@ public struct EgressObservation: Codable {
         if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
         if host == "*" { return nil }
         host = host.components(separatedBy: "%")[0]
+        return normalizedIP(host)
+    }
+
+    public static func normalizedIP(_ host: String) -> String? {
+        guard host.utf8.count < Int(INET6_ADDRSTRLEN), !host.utf8.contains(0) else { return nil }
         var v4 = in_addr(), v6 = in6_addr()
-        return inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1 ? host : nil
+        var text = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        if inet_pton(AF_INET, host, &v4) == 1 {
+            guard inet_ntop(AF_INET, &v4, &text, socklen_t(text.count)) != nil else { return nil }
+        } else if inet_pton(AF_INET6, host, &v6) == 1 {
+            let bytes = withUnsafeBytes(of: v6) { Array($0) }
+            if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 255, bytes[11] == 255 {
+                return bytes[12...].map(String.init).joined(separator: ".")
+            }
+            guard inet_ntop(AF_INET6, &v6, &text, socklen_t(text.count)) != nil else { return nil }
+        } else { return nil }
+        return String(cString: text)
     }
 
-    public static func parseSurgeDomains(dnsData: Data?, vipData: Data?) -> [String: [String]] {
+    public static func parseSurgeDomains(_ data: Data, source: String) throws -> [String: [String]] {
+        guard data.count <= 4_194_304, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw GuardError("Invalid Surge domain response")
+        }
         var sets: [String: Set<String>] = [:]
-        func cleanDomain(_ raw: String) -> String? {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, trimmed.utf8.count <= 255,
-                  !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return nil }
-            return trimmed
+        func add(_ raw: Any?, addresses: [String]) throws {
+            guard let raw = raw as? String else { throw GuardError("Missing domain in Surge response") }
+            let name = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let domain = name.hasSuffix(".") ? String(name.dropLast()) : name
+            guard !domain.isEmpty, domain.utf8.count <= 255,
+                  !domain.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains($0) }) else {
+                throw GuardError("Invalid domain in Surge response")
+            }
+            // DNS caches may contain CNAME/negative records; only numeric addresses can match a socket.
+            for address in addresses {
+                if let ip = normalizedIP(address) { sets[ip, default: []].insert(domain) }
+            }
         }
-        if let dnsData, dnsData.count <= 4_194_304,
-           let obj = try? JSONSerialization.jsonObject(with: dnsData) as? [String: Any] {
-            for entry in obj["dnsCache"] as? [[String: Any]] ?? [] {
-                guard let domain = (entry["domain"] as? String).flatMap(cleanDomain) else { continue }
-                for ip in entry["data"] as? [String] ?? [] where !ip.isEmpty {
-                    sets[ip, default: []].insert(domain)
+        if source == "dns" {
+            guard let cache = object["dnsCache"] as? [[String: Any]], let local = object["local"] as? [[String: Any]] else {
+                throw GuardError("Missing DNS cache/local arrays")
+            }
+            for entry in cache {
+                guard let addresses = entry["data"] as? [String] else { throw GuardError("Invalid DNS cache addresses") }
+                try add(entry["domain"], addresses: addresses)
+            }
+            for entry in local {
+                if entry["data"] is NSNull, let server = entry["server"] as? String, !server.isEmpty {
+                    try add(entry["domain"], addresses: [])
+                    continue
                 }
+                guard let address = entry["data"] as? String else { throw GuardError("Invalid local DNS address") }
+                try add(entry["domain"], addresses: [address])
             }
-            for entry in obj["local"] as? [[String: Any]] ?? [] {
-                guard let domain = (entry["domain"] as? String).flatMap(cleanDomain) else { continue }
-                if let ip = entry["data"] as? String, !ip.isEmpty {
-                    sets[ip, default: []].insert(domain)
-                }
+        } else if source == "virtual_ip" {
+            guard let items = object["items"] as? [[String: Any]] else { throw GuardError("Missing virtual IP items") }
+            for entry in items {
+                if let address = entry["IP"] as? String {
+                    guard normalizedIP(address) != nil else { throw GuardError("Invalid virtual IP address") }
+                    try add(entry["domain"], addresses: [address])
+                } else if let number = entry["i"] as? NSNumber, String(cString: number.objCType) != "c",
+                          let integer = UInt32(number.stringValue) {
+                    // The raw CLI uses d + a network-order IPv4 integer; formatted exports use domain + IP.
+                    let address = [24, 16, 8, 0].map { String((integer >> $0) & 255) }.joined(separator: ".")
+                    try add(entry["d"], addresses: [address])
+                } else { throw GuardError("Invalid virtual IP item") }
             }
-        }
-        if let vipData, vipData.count <= 4_194_304,
-           let obj = try? JSONSerialization.jsonObject(with: vipData) as? [String: Any] {
-            for entry in obj["items"] as? [[String: Any]] ?? [] {
-                guard let domain = (entry["domain"] as? String).flatMap(cleanDomain),
-                      let ip = entry["IP"] as? String, !ip.isEmpty else { continue }
-                sets[ip, default: []].insert(domain)
-            }
-        }
+        } else { throw GuardError("Unknown domain query source") }
         return sets.mapValues { Array($0.sorted().prefix(5)) }
-    }
-
-    public static func surgeDomainMap() -> [String: [String]] {
-        guard geteuid() != 0, FileManager.default.isExecutableFile(atPath: Probe.surgeCLI),
-              (try? Probe.trustedSurgePID()) != nil else { return [:] }
-        let dnsData = (try? Command.checked(Probe.surgeCLI, ["--raw", "dump", "dns"], timeout: 2)).map { Data($0.utf8) }
-        let vipData = (try? Command.checked(Probe.surgeCLI, ["--raw", "dump", "virtual-ip-db"], timeout: 2)).map { Data($0.utf8) }
-        return parseSurgeDomains(dnsData: dnsData, vipData: vipData)
     }
 
     public static func isPublicAddress(_ host: String) -> Bool {

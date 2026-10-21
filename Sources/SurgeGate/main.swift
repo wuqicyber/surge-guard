@@ -25,6 +25,9 @@ do {
     let args = Array(CommandLine.arguments.dropFirst())
     guard let action = args.first, !["help", "--help", "-h"].contains(action) else { print(usage); exit(0) }
     guard geteuid() != 0 else { throw GuardError("Run SurgeGate without sudo") }
+    let management = ["install", "setup", "start", "stop", "restart", "uninstall", "shutdown", "update-pause", "update-resume"].contains(action)
+        ? try lock("command.lock") : nil
+    defer { if let management { close(management) } }
     switch action {
     case "install", "setup": try install()
     case "run": try run()
@@ -35,7 +38,8 @@ do {
             print(try JSON.encode(Report(running: running, fresh: fresh, status: status)))
         } else { print(fresh ? "\(status.state): \(status.message)" : "状态过期或服务未运行") }
     case "start":
-        try ensureServiceLoaded()
+        try ensureServiceLoaded(waitForRunning: true)
+        try waitForFreshService()
         print("SurgeGate service started.")
     case "stop": try stopService()
     case "restart": try restartService()

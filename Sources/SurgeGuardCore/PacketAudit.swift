@@ -223,13 +223,31 @@ public struct PacketAuditSnapshot: Codable {
         return true
     }
 
-    public static func read() -> PacketAuditSnapshot? {
+    public static func read(service query: CommandResult? = nil) -> PacketAuditSnapshot? {
         guard (try? RootFiles.verify(Paths.publicState, directory: true)) != nil,
               (try? RootFiles.verify(PacketAudit.snapshot)) != nil,
               let data = try? Data(contentsOf: URL(fileURLWithPath: PacketAudit.snapshot)),
               let value = try? JSON.decode(PacketAuditSnapshot.self, from: data), value.fresh(),
-              let service = try? Command.run("/bin/launchctl", ["print", "system/" + PacketAudit.label]),
+              let service = query ?? (try? Command.run("/bin/launchctl", ["print", "system/" + PacketAudit.label])),
               (try? StatusReport.serviceRunning(service, pid: value.pid)) == true else { return nil }
         return value
+    }
+}
+
+public struct PacketAuditMenu {
+    public let title: String
+    public let canStop: Bool
+    public init(service: CommandResult?, snapshot: PacketAuditSnapshot?) {
+        guard let service, let running = try? StatusReport.serviceRunning(service) else {
+            title = "🟠 状态未知（采集可能仍在运行）"; canStop = true; return
+        }
+        guard running else {
+            title = "⚪️ 采集服务未运行（残留进程未核验）"; canStop = false; return
+        }
+        canStop = true
+        guard let snapshot, snapshot.fresh(), (try? StatusReport.serviceRunning(service, pid: snapshot.pid)) == true else {
+            title = "🟠 服务运行，采集状态待验证"; return
+        }
+        title = snapshot.state == "capturing" ? "🔵 正在抓包 · 路径未验证" : "🟠 采集不完整 / 异常（服务仍运行）"
     }
 }

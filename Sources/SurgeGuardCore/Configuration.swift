@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Darwin
 
 public struct RouteCheck: Codable, Equatable {
     public var url: String
@@ -94,6 +95,14 @@ public struct Configuration: Codable, Equatable {
         return try decode(Data(contentsOf: URL(fileURLWithPath: Paths.configuration)))
     }
 
+    // Only installation may supply a missing policy after creating the state directory.
+    public static func forInstallation(path: String = Paths.configuration) throws -> Configuration {
+        var info = stat()
+        if lstat(path, &info) != 0, errno == ENOENT { return .enhanced }
+        try RootFiles.verify(path)
+        return try decode(Data(contentsOf: URL(fileURLWithPath: path)))
+    }
+
     public func fingerprint() throws -> String {
         SHA256.hash(data: Data(try JSON.encode(self).utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -133,8 +142,17 @@ public struct RouteResult: Codable, Equatable {
               !group.isEmpty, !final.isEmpty, !type.isEmpty else {
             throw GuardError("Surge returned an incomplete rule explanation")
         }
-        let proxy = !["direct", "reject", "reject-drop", "reject-tinygif"].contains(type.lowercased())
-        let groupMatches = group == check.requiredGroup && steps.contains { $0["group"] as? String == check.requiredGroup }
+        let proxy = ["http", "https", "socks5", "socks5-tls", "ss", "shadowsocks", "snell", "vmess", "trojan",
+                     "wireguard", "hysteria2", "tuic", "tuic-v5", "ssh", "tailscale"].contains(type.lowercased())
+        var selected = group
+        var visited = Set<String>()
+        var resolved = !steps.isEmpty && steps.count <= 128
+        for step in steps {
+            guard let name = step["group"] as? String, name == selected, visited.insert(name).inserted,
+                  let next = step["selected"] as? String, !next.isEmpty else { resolved = false; break }
+            selected = next
+        }
+        let groupMatches = group == check.requiredGroup && resolved && selected == final && !visited.contains(final)
         let ready = groupMatches && proxy && check.allowsFinalPolicy(final)
         return RouteResult(url: check.url, expectedGroup: check.requiredGroup, actualGroup: group,
                            finalPolicy: final, ready: ready,

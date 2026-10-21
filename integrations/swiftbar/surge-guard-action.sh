@@ -22,7 +22,7 @@ case "$action" in
         exec "$gate_bin" "${action#gate-}" ;;
 esac
 
-service_pid() {
+service_snapshot() {
     local service_text query_status pid
     if service_text=$(sudo -n /bin/launchctl print "system/$label" 2>&1); then
         pid=$(printf '%s\n' "$service_text" | /usr/bin/awk '/^[[:space:]]*pid =/ {print $3}')
@@ -34,13 +34,18 @@ service_pid() {
                 fi ;;
             *[!0-9]*|0) printf '%s\n' 'Invalid guard PID; refusing recovery.' >&2; return 1 ;;
         esac
-        printf '%s\n' "$pid"
+        printf 'loaded %s\n' "$pid"
     else
         query_status=$?
-        if [ "$query_status" -eq 113 ] && [[ "$service_text" = *'Could not find service'* ]]; then return 0; fi
+        if [ "$query_status" -eq 113 ] && [[ "$service_text" = *'Could not find service'* ]]; then printf 'absent \n'; return 0; fi
         printf 'Cannot inspect guard service (status %s); refusing recovery: %s\n' "$query_status" "$service_text" >&2
         return 1
     fi
+}
+service_pid() {
+    local snapshot
+    snapshot=$(service_snapshot) || return 1
+    printf '%s\n' "${snapshot#* }"
 }
 wait_exit() {
     old_pid=$1
@@ -92,11 +97,17 @@ if [ "$action" = logs ] || [ "$action" = follow-logs ] || [ "$action" = audit-lo
 fi
 if [ "$action" = unlock ]; then
     # Independent of the guard executable, policy, renderer and network.
-    old_pid=$(service_pid)
-    if sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+    snapshot=$(service_snapshot)
+    old_pid=${snapshot#* }
+    if [[ "$snapshot" = 'loaded '* ]]; then
         sudo -n /bin/launchctl bootout "system/$label"
     fi
     wait_exit "$old_pid"
+    snapshot=$(service_snapshot)
+    if [[ "$snapshot" != 'absent ' ]]; then
+        printf '%s\n' 'Guard service is still loaded; refusing to clear rules.' >&2
+        exit 1
+    fi
     sudo -n /sbin/pfctl -a "$label" -F rules
     rules=$(sudo -n /sbin/pfctl -a "$label" -sr)
     [ -z "$rules" ] || { printf '%s\n' 'ERROR: guard rules are still present.' >&2; exit 1; }

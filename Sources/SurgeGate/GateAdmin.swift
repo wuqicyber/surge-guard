@@ -68,7 +68,7 @@ func install() throws {
     }
     let domain = "gui/\(getuid())"
     for label in [UserPaths.label, "com.user.surgegate"] {
-        if try Command.run("/bin/launchctl", ["print", "\(domain)/\(label)"]).status == 0 {
+        if try StatusReport.serviceLoaded(Command.run("/bin/launchctl", ["print", "\(domain)/\(label)"])) {
             try Command.checked("/bin/launchctl", ["bootout", "\(domain)/\(label)"], timeout: 10)
         }
     }
@@ -100,18 +100,21 @@ func install() throws {
     let domain = "gui/\(getuid())"
     let service = "\(domain)/\(UserPaths.label)"
     let probe = try Command.run("/bin/launchctl", ["print", service])
-    let wasLoaded = probe.status == 0
+    let wasLoaded = try StatusReport.serviceLoaded(probe)
     if !wasLoaded {
         guard FileManager.default.fileExists(atPath: UserPaths.plist) else { throw GuardError("SurgeGate plist not found; run install first") }
         try Command.checked("/bin/launchctl", ["enable", service])
         try Command.checked("/bin/launchctl", ["bootstrap", domain, UserPaths.plist], timeout: 10)
     }
+    if wasLoaded, !(try StatusReport.serviceRunning(probe)) {
+        try Command.checked("/bin/launchctl", ["kickstart", service])
+    }
     if waitForRunning {
-        let deadline = SystemClock.seconds + 5
-        while !(try Command.run("/bin/launchctl", ["print", service]).output.contains("state = running")) && SystemClock.seconds < deadline {
+        let deadline = SystemClock.seconds + 15
+        while !(try StatusReport.serviceRunning(Command.run("/bin/launchctl", ["print", service]))) && SystemClock.seconds < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        guard try Command.run("/bin/launchctl", ["print", service]).output.contains("state = running") else {
+        guard try StatusReport.serviceRunning(Command.run("/bin/launchctl", ["print", service])) else {
             throw GuardError("SurgeGate service must be running")
         }
     }
@@ -120,11 +123,14 @@ func install() throws {
 
 func stopService() throws {
     let service = "gui/\(getuid())/\(UserPaths.label)"
-    if try Command.run("/bin/launchctl", ["print", service]).status == 0 {
+    if try StatusReport.serviceLoaded(Command.run("/bin/launchctl", ["print", service])) {
         try Command.checked("/bin/launchctl", ["bootout", service], timeout: 10)
     }
     let fd = try lock("gate.lock", timeout: 10)
-    close(fd)
+    defer { close(fd) }
+    guard !(try StatusReport.serviceLoaded(Command.run("/bin/launchctl", ["print", service]))) else {
+        throw GuardError("SurgeGate is still loaded; stop is not confirmed")
+    }
     try? FileManager.default.removeItem(atPath: shutdownPath)
     try publish("stopped", "Stopped by user; current network and PF rules are unchanged",
                 pending: (try? GateSession.load().pending) ?? [], surge: surgeIdentity(), update: try? GateUpdate.load())
@@ -132,36 +138,53 @@ func stopService() throws {
     print("SurgeGate service stopped. Current network and PF protection are unchanged.")
 }
 
+func waitForFreshService(after previousPID: Int32? = nil) throws {
+    let deadline = SystemClock.seconds + 20
+    repeat {
+        let report = try readStatus()
+        if report.fresh, report.status.pid != previousPID { return }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    } while SystemClock.seconds < deadline
+    throw GuardError("SurgeGate did not publish fresh status; service startup/restart is not confirmed")
+}
+
 func restartService() throws {
     let service = "gui/\(getuid())/\(UserPaths.label)"
-    if try ensureServiceLoaded() {
-        print("SurgeGate was stopped; service started.")
+    let previous = try readStatus()
+    let started = try ensureServiceLoaded(waitForRunning: true)
+    if started || !previous.running {
+        try waitForFreshService()
+        print("SurgeGate was stopped; service startup confirmed.")
     } else {
         try Command.checked("/bin/launchctl", ["kill", "SIGTERM", service])
-        print("Restart requested; launchd restarts the user service")
+        try waitForFreshService(after: previous.running ? previous.status.pid : nil)
+        print("SurgeGate restart confirmed by fresh service status.")
     }
 }
 
 func queueShutdown(_ action: String) throws {
-    guard try GateUpdate.load()?.paused != true else { throw GuardError("Finish or cancel the Surge update and resume Gate before ordered shutdown") }
-    try ensureServiceLoaded(waitForRunning: true)
-    if FileManager.default.fileExists(atPath: shutdownPath) {
-        let existing = (try? Data(contentsOf: URL(fileURLWithPath: shutdownPath)))
-            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
-        if existing?["boot_id"] != SystemClock.bootID {
-            try? FileManager.default.removeItem(atPath: shutdownPath)
-        } else {
-            throw GuardError("A shutdown request is already queued")
-        }
+    let request = try GateShutdownRequest(action: action)
+    let fd = try lock("request.lock")
+    do {
+        defer { close(fd) }
+        guard try GateUpdate.load()?.paused != true else { throw GuardError("Finish or cancel the Surge update and resume Gate before ordered shutdown") }
+        let report = try readStatus()
+        guard !(report.running && report.status.state == "shutting_down") else { throw GuardError("Ordered shutdown is still in progress") }
+        guard try GateShutdownRequest.load() == nil else { throw GuardError("A shutdown request is already queued") }
+        // Publish before bootstrap so a new service cannot restore applications first.
+        try UserPaths.write(try JSON.encode(request), to: shutdownPath)
     }
-    let request = ["action": action, "boot_id": SystemClock.bootID]
-    try UserPaths.write(String(decoding: JSONSerialization.data(withJSONObject: request), as: UTF8.self), to: shutdownPath)
-    print("Queued normal shutdown. Unsaved-document dialogs may need your attention; check SurgeGate logs if aborted.")
+    do { try ensureServiceLoaded(waitForRunning: true) }
+    catch { throw GuardError("Shutdown request retained, but service startup failed: \(error). Inspect status before retrying.") }
+    print("Queued normal shutdown. Unsaved-document dialogs may need your attention; after macOS cancels a submitted request, explicitly retry or restart Gate to resume recovery.")
 }
 
 func uninstallService() throws {
     let service = "gui/\(getuid())/\(UserPaths.label)"
-    if try Command.run("/bin/launchctl", ["print", service]).status == 0 { try Command.checked("/bin/launchctl", ["bootout", service], timeout: 10) }
+    if try StatusReport.serviceLoaded(Command.run("/bin/launchctl", ["print", service])) { try Command.checked("/bin/launchctl", ["bootout", service], timeout: 10) }
+    let fd = try lock("gate.lock", timeout: 10)
+    defer { close(fd) }
+    guard !(try StatusReport.serviceLoaded(Command.run("/bin/launchctl", ["print", service]))) else { throw GuardError("SurgeGate is still loaded") }
     for path in [UserPaths.plist, UserPaths.binary] where FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
     print("User service removed; configuration/session/logs retained. System guard is separate.")
 }

@@ -60,7 +60,10 @@ enum CLI {
     }
 
     static func check(_ args: [String] = ["check"], helperPath: String = Paths.binary) throws -> CheckReport {
-        let configuration = try policy(args)
+        try check(configuration: policy(args), helperPath: helperPath)
+    }
+
+    static func check(configuration: Configuration, helperPath: String = Paths.binary) throws -> CheckReport {
         let readiness = try Probe.readiness()
         var report = CheckReport(ready: readiness.ready, mode: configuration.mode,
                                  readiness: readiness, reasons: readiness.reasons)
@@ -151,28 +154,23 @@ enum CLI {
             let report = StatusReport.read()
             print(try JSON.encode(report, pretty: !args.contains("--json")))
         case "observe-egress":
-            let report = try EgressObservation.collect()
+            var report = try EgressObservation.collect()
+            report.querySurgeDomains()
             if args.contains("--json") { print(try JSON.encode(report)) }
             else {
                 if report.flows.isEmpty { print("本次采样没有可展示的其他接口 socket 记录；覆盖缺口见下方。这不能确认历史或采样间隔内是否绕过。") }
                 else {
-                    var details = (try JSONSerialization.jsonObject(with: Data(JSON.encode(report).utf8)) as? [String: Any]) ?? [:]
-                    let domains = EgressObservation.surgeDomainMap()
-                    if !domains.isEmpty, var flows = details["flows"] as? [[String: Any]] {
-                        for index in flows.indices {
-                            if let remote = flows[index]["remote_endpoint"] as? String,
-                               let host = EgressObservation.endpointHost(remote),
-                               let matched = domains[host], !matched.isEmpty {
-                                flows[index]["candidate_domains"] = matched
-                            }
-                        }
-                        details["flows"] = flows
-                    }
+                    let details = try JSONSerialization.jsonObject(with: Data(JSON.encode(report).utf8))
                     let timestamp = ISO8601DateFormatter()
                     timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                     let event: [String: Any] = ["event": "egress_path_observed", "component": "SurgeGuard", "details": details,
                                               "time": timestamp.string(from: report.sampledAt)]
                     print(LogReader.format(String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self)))
+                }
+                for source in ["dns", "virtual_ip"] {
+                    if let query = report.domainQueries?[source] {
+                        print("候选域名查询 \(source)：\(query.status)\(query.error.map { " · " + $0 } ?? "")")
+                    }
                 }
                 print("采样缺口：目标未知 \(report.unresolvedActiveSockets)，接口未知 \(report.unattributedActiveSockets)，无计数 \(report.unmeasuredSockets)。只读，不修改防火墙。")
             }

@@ -32,7 +32,7 @@ install -m 700 "$project_dir/.build/release/surge-guard" "$user_dir/bin/surge-gu
 mv -f "$user_dir/bin/surge-guard-ui.new" "$user_dir/bin/surge-guard-ui"
 install -m 700 "$project_dir/integrations/swiftbar/surge-guard-action.sh" "$user_dir/bin/surge-guard-action"
 install -m 700 "$project_dir/integrations/swiftbar/surge-guard.5s.sh" "$user_dir/bin/surge-guard-menu"
-if [ "${1:-}" = --recovery-only ]; then
+if [ "${1:-}" = --recovery-only ] || [ "${1:-}" = --menu-only ]; then
     printf '%s\n' 'Offline recovery menu installed without changing system/user services. Invoke surge-guard-menu --section in your combined plugin.'
     printf 'Previous user menu files: %s\n' "$user_backup"
     exit 0
@@ -43,10 +43,6 @@ case "$("$guard_bin" --help 2>/dev/null || true)" in
 esac
 "$project_dir/.build/release/surge-gate" install
 printf '%s\n' 'Existing system policy, rule draft and persistent update pause are retained. Apply policy changes explicitly with configure.'
-if [ "${1:-}" = --menu-only ]; then
-    printf '%s\n' 'User service and menu renderer installed. Call the renderer with --section from your existing plugin.'
-    exit 0
-fi
 plugin_dir=${1:-$(/usr/bin/defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null || true)}
 if [ -z "$plugin_dir" ] || [ ! -d "$plugin_dir" ]; then
     printf '%s\n' 'No SwiftBar plugin directory found. The user service is installed; pass a plugin directory to install the menu.'

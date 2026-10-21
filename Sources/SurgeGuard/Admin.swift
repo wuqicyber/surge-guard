@@ -65,7 +65,7 @@ enum Admin {
         let original = try String(contentsOfFile: Paths.pfConfig)
         let updated = try Policy.attaching(to: original)
         try RootFiles.preparePublicState()
-        if FileManager.default.fileExists(atPath: Paths.configuration) { _ = try Configuration.load() }
+        let configuration = try Configuration.forInstallation()
         // A signed/compiled source executable may be user-owned; it is copied
         // once into the protected system path. No root-executed user script.
         let source = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
@@ -85,7 +85,7 @@ enum Admin {
         }
         let backup = FileManager.default.fileExists(atPath: Paths.binary) ? try Recovery.save(kind: "update") : nil
         if let backup { try Recovery.validate(backup) }
-        let expectAllowed = try CLI.check(helperPath: stagedBinary).ready
+        let expectAllowed = try CLI.check(configuration: configuration, helperPath: stagedBinary).ready
         do {
             if upgrading { try stop() }
             do {
@@ -109,7 +109,7 @@ enum Admin {
                 try RootFiles.write(updated, to: Paths.pfConfig, mode: 0o644)
                 try RootFiles.write(plist, to: Paths.plist, mode: 0o644)
                 if !FileManager.default.fileExists(atPath: Paths.configuration) {
-                    try RootFiles.write(try JSON.encode(Configuration.enhanced, pretty: true), to: Paths.configuration, mode: 0o644)
+                    try RootFiles.write(try JSON.encode(configuration, pretty: true), to: Paths.configuration, mode: 0o644)
                 }
             }
             if upgrading {
