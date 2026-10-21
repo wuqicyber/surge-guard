@@ -1,0 +1,51 @@
+Sources/SurgeGate/GateAdmin.swift
+  s_932087378bf127::t_6f797386080989 160,171-173,179-184,188-196
+Sources/SurgeGate/GateService.swift
+  s_932087378bf127::t_2146e424f8766b 29,31-34,37-39,41-42,44-45,47-49,57-58,126-127,131-132,152-154,160-163,166,168-179,209,271,282-286,288-297,301,306-316,319-332,350-353,379
+Sources/SurgeGuard/SwiftBar.swift
+  s_e7ad76e3cbae90::t_09197f798da346 139
+Sources/SurgeGuard/main.swift
+  s_e7ad76e3cbae90::t_5fc0c083d3a157 55-56
+Sources/SurgeGuardCore/EventFile.swift
+  s_e7ad76e3cbae90::t_667bda237a5806 18,23,37
+Sources/SurgeGuardCore/GateConfiguration.swift
+  s_e7ad76e3cbae90::t_cdaa75ffb54c74 39-51,99-100,126,164
+Sources/SurgeGuardCore/LogReader.swift
+  s_932087378bf127::t_02e042e97f912a 81-82,84-87,104,285
+Sources/SurgeGuardCore/SurgeProcess.swift
+  s_e7ad76e3cbae90::t_8de1144123bcc3 3,13-29,36-39
+Tests/SurgeGuardTests/main.swift
+  s_932087378bf127::t_2f82886b0f424a 12-18,665-669,771,778-779,911-916,1013-1018,1064-1077,1105-1152,1157-1166
+Sources/SurgeGate/main.swift
+  s_932087378bf127::t_dc64059f8ec20a 15-16,30,37,51-55
+Sources/SurgeGuard/Admin.swift
+  s_932087378bf127::t_73092198f78ee0 235-240
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_932087378bf127::t_06d60b7a9ad6d8 86,95-108,115-119,121,125-130
+Sources/SurgeGuardCore/GateUpdate.swift
+  s_932087378bf127::t_7bed8f39cb73e7 41,73-74,76-96,98-99,102-110,114-117,131-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "579f647882ce03965cd006e7a3e053317a24a026",
+  "prompts": {},
+  "sessions": {
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_e7ad76e3cbae90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c9dc98ea-70b9-4e00-9e31-9ba53f92dd9b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
