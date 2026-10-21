@@ -1,0 +1,22 @@
+Sources/SurgeGate/GateAdmin.swift
+  h_debc74f7d1c6f4 1-167
+Sources/SurgeGate/GateService.swift
+  h_debc74f7d1c6f4 1-330
+Sources/SurgeGate/main.swift
+  h_debc74f7d1c6f4 38,40-41,53-54
+Sources/SurgeGuard/Admin.swift
+  h_debc74f7d1c6f4 88
+Sources/SurgeGuard/CLI.swift
+  h_debc74f7d1c6f4 62,69,89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "f1e5a97bfa12ffa1c95b384e04649fe57de3440f",
+  "prompts": {},
+  "humans": {
+    "h_debc74f7d1c6f4": {
+      "author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
