@@ -15,12 +15,12 @@ public enum EventFile {
             }
             return info
         }
-        let lock = open(lockPath, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        let lock = open(lockPath, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
         guard lock >= 0 else { throw GuardError("Cannot open event log lock") }
         defer { close(lock) }
         _ = try verify(lock)
         guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw GuardError("Event log busy") }
-        var fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        var fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
         guard fd >= 0 else { throw GuardError("Cannot open event log") }
         defer { if fd >= 0 { close(fd) } }
         let info = try verify(fd)
@@ -34,7 +34,7 @@ public enum EventFile {
             } else if errno != ENOENT { throw GuardError("Cannot inspect rotated event log") }
             guard rename(path, backup) == 0 else { throw GuardError("Cannot rotate event log") }
             close(fd)
-            fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
             _ = try verify(fd)
         }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)

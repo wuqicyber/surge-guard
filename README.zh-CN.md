@@ -79,9 +79,28 @@ IPv6 的 VIF 例外，也不提供 Tailscale、其他 VPN 或局域网例外。�
 暂停保存在私有 `update-mode.json`，跨 Gate 重启和电脑重启保留；损坏或读失败时暂停
 自动操作并报告错误。确认超时仍保留请求，不能开始更新。已有退出/启动操作须完成后才
 确认暂停；暂停期间拒绝有序关机请求。启动超时不会取消 NSWorkspace 请求或专用启动器，
-`pending-launch.json` 会跨 Gate 重启保留在途状态；回调结束、确认应用启动或启动器退出后才
-确认暂停。Gate 崩溃后无法确认完成时，自动恢复与暂停确认保持阻塞，直到应用出现或重启电脑
-使旧 boot 请求失效；手工删除标记不能视为取消了启动请求。真实恢复失败执行 30 秒退避；单纯等待 Guard
+`pending-launch.json` 记录发起请求的 Gate 实例，以及专用启动器的 PID 和出生时间。
+Gate 重启后，确认应用启动即可结束等待；已记录的启动器退出或 PID 被复用时，按失败处理并
+退避 30 秒后恢复。仍存活的启动器或尚未结束的回调继续阻止暂停确认。
+
+若 Gate 在保存子进程身份之前崩溃，或丢失了 NSWorkspace 回调，仅凭应用没有出现无法确认
+请求已取消。Gate 会显示 `launch_recovery_required`，给出应用和请求 ID。独立确认旧启动
+已完成、失败或取消后，可用普通用户运行：
+
+```sh
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" status --json
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" recover-launch REQUEST_UUID --confirm-settled
+```
+
+将 `REQUEST_UUID` 换成新鲜状态中的 `pending_launch.id`。该命令依赖你的明确确认，只清除
+对应的孤立请求，不会取消 LaunchServices 操作，也不会解除已有更新暂停。无法确认时须继续
+等待或重启电脑，使旧 boot 请求失效；超时和手工删除标记都不代表启动已取消。
+有序关机会明确拒绝未决启动；已经排队的关机请求也会被消费并拒绝，不要求应用退出，避免
+以后恢复启动时意外执行旧关机请求。若服务启动失败且请求尚未消费，则按 nonce 撤回，允许
+重试；已消费的请求须查状态和日志确认结果。Gate 配置、会话和状态文件实行大小上限，拒绝
+符号链接及特殊文件，要求当前用户属主且无组或其他用户访问权限（通常为 `0600`）。
+
+真实恢复失败执行 30 秒退避；单纯等待 Guard
 确认阻断不占用退避。每次身份修复只发送一次正常退出请求，不强制终止。
 
 安装器创建无普通成员的 `_surge_guard` 组，并安装 root 所有、模式为 `2755` 的固定

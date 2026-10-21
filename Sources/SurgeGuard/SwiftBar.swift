@@ -136,7 +136,7 @@ enum SwiftBar {
                     } else {
                         lines.append("-- 暂停请求尚未确认，暂勿开始升级：\(clean(report.status.message ?? "等待在途操作结束"))" + noteStyle)
                     }
-                } else if ["waiting_identity", "recovery_failed", "error"].contains(report.status.state),
+                } else if ["waiting_identity", "recovery_failed", "error", "launch_pending", "launch_recovery_required"].contains(report.status.state),
                           let message = report.status.message {
                     lines.append("-- 原因：\(clean(message)) | color=#92400E,#FCD34D size=12")
                 }

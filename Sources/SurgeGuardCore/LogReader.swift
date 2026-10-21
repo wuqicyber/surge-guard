@@ -78,7 +78,13 @@ public enum LogReader {
                       "gate_error": "应用门禁异常", "readiness_loss_blocked": "接管失效，优先阻断已验证",
                       "update_paused": "Surge 更新暂停：自动启动、身份修复和应用恢复已暂停",
                       "update_resumed": "Surge 更新模式结束：自动恢复已启用",
+                      "update_pause_requested": "已请求暂停，须等待 Gate 确认后再更新",
+                      "update_resume_requested": "已请求恢复自动启动，等待 Gate 确认",
                       "surge_recovery_failed": "Surge 恢复失败：30 秒后重试",
+                      "launch_pending": "应用启动尚在进行，暂停更新未确认",
+                      "launch_recovery_required": "启动结果未知，需要人工确认恢复",
+                      "launch_recovery_confirmed": "用户已确认旧启动结束，解除等待",
+                      "launch_failed_after_restart": "旧启动器已退出，等待退避后恢复",
                       "egress_path_observed": "socket 采样记录（实际路径未验证）",
                       "egress_observation_failed": "出口观测暂不可用", "egress_observation_recovered": "出口观测已恢复",
                       "egress_observation_summary": "出口观测摘要",
@@ -95,6 +101,7 @@ public enum LogReader {
                       "audit_surge_history_gap": "Surge 请求历史可能不完整",
                       "application_restore_failed": "应用启动失败，保留待重试", "shutdown_started": "开始有序退出",
                       "shutdown_aborted": "关机已中止，会话已保留", "shutdown_requested": "已请求系统关机",
+                      "shutdown_declined": "关机请求已拒绝，应用未被要求退出",
                       "legacy_migrated": "旧配置已迁移", "migration_app_unresolved": "旧应用名称需要补全 Bundle ID"]
         let title = unavailable ? "系统门禁状态暂不可读" : legacyProgress.map { $0 == 0 ? "应用门禁已就绪" : "正在恢复应用" } ??
             (event == "gate_changed" ? (message == "allowed" ? "ALLOWED / 已放行" : "BLOCKED / 已阻断") : titles[event] ?? event)
@@ -275,6 +282,7 @@ public enum LogReader {
 
     public static func show(path: String, follow: Bool, json: Bool) throws {
         let task = Process(), pipe = Pipe()
+        defer { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
         task.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
         task.arguments = ["-n", "200"] + (follow ? ["-F"] : []) + [path]
         task.standardOutput = pipe

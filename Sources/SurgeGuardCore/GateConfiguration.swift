@@ -36,6 +36,19 @@ public enum UserPaths {
         return data
     }
 
+    public static func lock(at path: String, timeout: TimeInterval = 0) throws -> Int32 {
+        try prepare(URL(fileURLWithPath: path).deletingLastPathComponent().path)
+        let fd = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else { throw GuardError("Cannot open Gate lock") }
+        do {
+            var info = stat()
+            guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG,
+                  info.st_mode & 0o077 == 0 else { throw GuardError("Unsafe Gate lock") }
+            try RuntimeLock.acquire(fd, timeout: timeout)
+        } catch { close(fd); throw error }
+        return fd
+    }
+
     public static func write(_ text: String, to path: String) throws {
         try prepare()
         guard URL(fileURLWithPath: path).deletingLastPathComponent().path == directory else {
@@ -83,8 +96,8 @@ public struct GateConfiguration: Codable, Equatable {
     }
 
     public static func load() throws -> GateConfiguration {
-        let data = try Data(contentsOf: URL(fileURLWithPath: UserPaths.config))
-        guard data.count <= 65_536, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let data = try UserPaths.readPrivate(UserPaths.config, maximumBytes: 65_536),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["version", "startup_apps", "priority_order", "excluded_apps", "restore_session", "delay_between_apps_seconds", "quit_timeout_seconds"] else {
             throw GuardError("Invalid or unknown SurgeGate configuration fields")
         }
@@ -110,8 +123,7 @@ public struct GateSession: Codable {
     public init(apps: [String], pending: [String]) { self.apps = apps; self.pending = pending; savedAt = Date() }
 
     public static func load() throws -> GateSession {
-        guard FileManager.default.fileExists(atPath: UserPaths.session) else { return GateSession(apps: [], pending: []) }
-        let data = try Data(contentsOf: URL(fileURLWithPath: UserPaths.session))
+        guard let data = try UserPaths.readPrivate(UserPaths.session, maximumBytes: 65_536) else { return GateSession(apps: [], pending: []) }
         return try decode(data)
     }
 
@@ -149,6 +161,7 @@ public struct GateStatusReport: Decodable {
         case "waiting_identity": return "🟠 等待阻断以修复身份"
         case "update_pausing": return "🟠 暂停确认中 · 等待启动请求结束"
         case "launch_pending": return "🟠 启动请求尚未结束"
+        case "launch_recovery_required": return "🔴 启动结果未知 · 需确认恢复"
         case "shutdown_requested": return "🟠 已提交电源请求 · 系统取消后可重试"
         case "update_paused": return "🟠 已暂停自动重开 Surge"
         case "recovery_failed": return "🔴 Surge 恢复失败 · 等待重试"

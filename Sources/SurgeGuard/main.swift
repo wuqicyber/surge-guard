@@ -52,6 +52,8 @@ final class Daemon {
 
     func surgeProcessTrusted() throws -> Bool {
         let candidates = try Probe.surgeCandidates()
+        // Block a changed process before signature checks can replace its watcher and cached route trust.
+        if allowed, !surgeTrust.matches(candidates: candidates) { return false }
         let sameCandidates = candidates == lastSurgeCandidates
         lastSurgeCandidates = candidates
         let candidate = try surgeTrust.trustedPID(candidates: candidates, validate: Probe.surgeSignatureValid)

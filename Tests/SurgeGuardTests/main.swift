@@ -9,6 +9,13 @@ if Array(CommandLine.arguments.dropFirst()) == ["--packet-audit-group-check"] {
     exit(0)
 }
 
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--event-fifo-check" {
+    let path = CommandLine.arguments[2]
+    do { try EventFile.append(Data("fixture".utf8), to: path, owner: getuid(), lockPath: path + ".lock") }
+    catch { print("rejected"); exit(0) }
+    exit(1)
+}
+
 // Standalone checks also work with Command Line Tools, where XCTest may not
 // be installed. Throw on failure so checks still work in optimized builds.
 func check(_ value: @autoclosure () throws -> Bool, _ message: String) throws {
@@ -655,6 +662,11 @@ do {
     func signature(_ pid: pid_t) -> Bool { signatureQueries += 1; return pid == 100 }
     try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100, "Single valid process rejected")
     try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100 && signatureQueries == 1, "Unchanged process signature was not cached")
+    try check(processTrust.matches(candidates: [processA]), "Current trusted identity was lost")
+    for changed in [[], [processB], [processA, processB], [SurgeProcess(pid: 100, startedSeconds: 3, startedMicroseconds: 1)]] {
+        try check(!processTrust.matches(candidates: changed), "Process replacement could retain allowed state before signature validation")
+    }
+    try check(signatureQueries == 1, "Identity-change check invoked signature validation before blocking")
     try check(try processTrust.trustedPID(candidates: [processA, processB], validate: signature) == nil, "Second process did not invalidate cached trust")
     try check(try processTrust.trustedPID(candidates: [processA], validate: signature) == 100 && signatureQueries == 2, "Returning to a single process reused invalidated trust")
     let reusedPID = SurgeProcess(pid: 100, startedSeconds: 3, startedMicroseconds: 1)
@@ -756,13 +768,15 @@ do {
         (true, true, "waiting", [], true, false), (true, true, "restoring", [], true, false),
         (true, true, "error", [], true, false), (true, true, "unknown", [], true, false), (true, true, "shutting_down", [], true, false),
         (true, true, "update_paused", [], true, false), (true, true, "waiting_identity", [], true, false),
-        (true, true, "recovery_failed", [], true, false)
+        (true, true, "recovery_failed", [], true, false), (true, true, "launch_recovery_required", [], true, false)
     ] {
         let object: [String: Any] = ["running": running, "fresh": fresh, "status": ["state": state, "pending": pending]]
         let report = try JSON.decode(GateStatusReport.self, from: JSONSerialization.data(withJSONObject: object))
         try check(report.menuTitle(guardAllowed: allowed).contains("🟢") == green, "SurgeGate menu displayed false green")
     }
     print("PASS: companion green requires fresh running ready state, no pending apps and verified network permission")
+    let pauseRequested = LogReader.format("{\"component\":\"SurgeGate\",\"event\":\"update_pause_requested\",\"message\":\"Waiting for launch\"}")
+    try check(pauseRequested.contains("须等待 Gate 确认") && !pauseRequested.contains("已暂停"), "Pause request log claimed completed acknowledgement")
 
     let pause = GateUpdate(paused: true), resume = GateUpdate(paused: false)
     let pauseData = Data(try JSON.encode(pause).utf8)
@@ -894,6 +908,12 @@ do {
         try FileManager.default.removeItem(atPath: path + ".1")
         try FileManager.default.createSymbolicLink(atPath: path + ".1", withDestinationPath: path)
         try rejects { try EventFile.append(Data(repeating: 65, count: EventFile.maximumBytes / 2), to: path, owner: getuid(), lockPath: lockPath) }
+        let fifo = eventDirectory.appendingPathComponent("fifo").path
+        try check(mkfifo(fifo, 0o600) == 0, "Cannot create FIFO fixture")
+        let rejected = try Command.run(CommandLine.arguments[0], ["--event-fifo-check", fifo], timeout: 2)
+        try check(rejected.status == 0 && rejected.output.contains("rejected"), "Event FIFO blocked before file validation")
+        try rejects { _ = try UserPaths.readPrivate(fifo) }
+        try rejects { let fd = try UserPaths.lock(at: fifo); close(fd) }
     }
     print("PASS: bounded private event logs retain only current/previous files and reject oversized or unsafe writes")
 
@@ -990,6 +1010,12 @@ do {
         _ = try Command.run("/bin/cat", [], input: "test")
     }
     try check(descriptorCount() <= failedDescriptors + 2, "Command failure/input/timeout leaked pipe descriptors")
+    let emptyLog = FileManager.default.temporaryDirectory.appendingPathComponent("surge-empty-log-" + UUID().uuidString)
+    try Data().write(to: emptyLog)
+    defer { try? FileManager.default.removeItem(at: emptyLog) }
+    let logDescriptors = descriptorCount()
+    for _ in 0..<20 { try LogReader.show(path: emptyLog.path, follow: false, json: true) }
+    try check(descriptorCount() <= logDescriptors + 2, "Repeated log reads leaked pipe descriptors")
     let mockService = try Command.run("/usr/bin/printf", ["state = running\n pid = 123\n"])
     try check(try StatusReport.serviceRunning(mockService, pid: 123), "Running daemon rejected")
     try check(!(try StatusReport.serviceRunning(mockService, pid: 456)), "Mismatched PID accepted")
@@ -1035,6 +1061,20 @@ do {
     try rejects { _ = try StatusReport.serviceLoaded(Command.run("/bin/sh", ["-c", "exit 5"])) }
     try rejects { _ = try StatusReport.serviceRunning(Command.run("/usr/bin/printf", ["state = running\n"])) }
     try rejects { _ = try StatusReport.serviceRunning(Command.run("/usr/bin/printf", ["state = running\npid = 0\n"])) }
+    for pids in ["pid = 1", "pid = 123\npid = malformed", "pid = 123\npid = 456"] {
+        try rejects { _ = try StatusReport.servicePID(Command.run("/usr/bin/printf", ["state = running\n" + pids + "\n"])) }
+    }
+    try check(try StatusReport.servicePID(mockService) == 123 && StatusReport.servicePID(waitingJob) == nil,
+              "Restart identity was not read from the actual service")
+    var mismatchedSnapshot = GuardSnapshot(runId: "fixture", firewallVerifiedUptime: SystemClock.seconds,
+                                          allowed: true, configurationMode: "enhanced", readiness: nil, session: nil, reasons: [])
+    mismatchedSnapshot.pid = 456
+    let mismatch = try StatusReport.evaluate(service: mockService, snapshot: mismatchedSnapshot)
+    try check(mismatch.state == "unknown" && mismatch.daemonRunning && !mismatch.firewallVerified && mismatch.reason == "status_process_mismatch",
+              "Old process snapshot described a running replacement daemon as stopped/allowed")
+    mismatchedSnapshot.pid = 123
+    try check(try StatusReport.evaluate(service: mockService, snapshot: mismatchedSnapshot).state == "allowed", "Current fresh daemon rejected")
+    try check(try StatusReport.evaluate(service: absentService, snapshot: mismatchedSnapshot).state == "stopped", "Absent daemon reported as running")
     try check(PacketAuditMenu(service: mockService, snapshot: nil).canStop &&
               PacketAuditMenu(service: nil, snapshot: nil).canStop &&
               !PacketAuditMenu(service: absentService, snapshot: nil).canStop,
@@ -1062,10 +1102,68 @@ do {
     try check(try GatePendingLaunch.load(from: pendingPath) == laterLaunch, "Obsolete launch completion cleared a newer request")
     try laterLaunch.complete(at: pendingPath)
     try check(try GatePendingLaunch.load(from: pendingPath) == nil, "Completed launch kept its pause fence")
+    let oldObserver = UUID(), newObserver = UUID()
+    let orphan = GatePendingLaunch(app: "com.example.failed", observer: oldObserver)
+    try orphan.save(at: pendingPath)
+    let reloaded = try GatePendingLaunch.load(from: pendingPath)!
+    try check(reloaded.disposition(observer: newObserver, callbackPending: false, appRunning: false, childIdentity: nil) == .orphaned,
+              "Lost observer with absent app remained an eternal in-flight launch")
+    try check(reloaded.disposition(observer: oldObserver, callbackPending: true, appRunning: true, childIdentity: nil) == .inFlight,
+              "An active callback was bypassed by app appearance")
+    try check(reloaded.disposition(observer: newObserver, callbackPending: false, appRunning: true, childIdentity: nil) == .settled,
+              "Observed startup could not settle an orphan")
+    try check(reloaded.disposition(observer: oldObserver, callbackPending: false, appRunning: false, childIdentity: nil) == .failed,
+              "A finished local observer remained stuck after completion cleanup failed")
+    try check(pendingLaunch.disposition(observer: newObserver, callbackPending: false, appRunning: false, childIdentity: nil) == .orphaned,
+              "Legacy marker without observer was not recoverable")
+    try rejects { try laterLaunch.save(at: pendingPath) }
+    try rejects { try GatePendingLaunch.recover(id: orphan.id, observer: oldObserver, at: pendingPath) }
+    try rejects { try GatePendingLaunch.recover(id: UUID(), observer: newObserver, at: pendingPath) }
+    try rejects { try GateShutdownRequest.validate(paused: false, pendingLaunch: reloaded, phase: .idle) }
+    try check(!pause.acknowledged(by: pause, state: "launch_recovery_required", fresh: true) &&
+              !resume.acknowledged(by: resume, state: "launch_recovery_required", fresh: true), "Orphaned launch acknowledged an update")
+    try GatePendingLaunch.recover(id: orphan.id, observer: newObserver, at: pendingPath)
+    try GateShutdownRequest.validate(paused: false, pendingLaunch: GatePendingLaunch.load(from: pendingPath), phase: .idle)
+    try laterLaunch.save(at: pendingPath)
+    try orphan.complete(at: pendingPath)
+    try check(try GatePendingLaunch.load(from: pendingPath)?.id == laterLaunch.id, "Late completion cleared post-recovery launch")
+    try laterLaunch.complete(at: pendingPath)
+
+    let launchChild = Process()
+    launchChild.executableURL = URL(fileURLWithPath: "/bin/sleep"); launchChild.arguments = ["0.5"]
+    try launchChild.run()
+    var tracked = GatePendingLaunch(app: "com.nssurge.surge-mac", observer: oldObserver)
+    tracked.child = try SurgeProcess.read(pid: launchChild.processIdentifier)
+    try check(tracked.child != nil, "Native launcher fixture missing")
+    try tracked.save(at: pendingPath)
+    let afterRestart = try GatePendingLaunch.load(from: pendingPath)!
+    try check(afterRestart.disposition(observer: newObserver, callbackPending: false, appRunning: false,
+                                       childIdentity: SurgeProcess.read(pid: launchChild.processIdentifier)) == .inFlight,
+              "Living launcher was forgotten after observer restart")
+    try rejects { try GatePendingLaunch.recover(id: tracked.id, observer: newObserver, at: pendingPath) }
+    launchChild.waitUntilExit()
+    try check(afterRestart.disposition(observer: newObserver, callbackPending: false, appRunning: false,
+                                       childIdentity: SurgeProcess.read(pid: launchChild.processIdentifier)) == .failed,
+              "Exited launcher with no app blocked recovery after Gate restart")
+    let reusedChild = SurgeProcess(pid: tracked.child!.pid, startedSeconds: tracked.child!.startedSeconds + 1, startedMicroseconds: 0)
+    try check(afterRestart.disposition(observer: newObserver, callbackPending: false, appRunning: false, childIdentity: reusedChild) == .failed,
+              "PID reuse retained a dead launch request")
+    try tracked.complete(at: pendingPath)
+    print("PASS: restart launch recovery distinguishes living/exited/reused children, legacy/orphaned callbacks and exact-nonce confirmation")
     let request = try GateShutdownRequest(action: "restart")
     let requestPath = reviewDirectory.appendingPathComponent("shutdown.json").path
     try AtomicFile.write(JSON.encode(request), to: requestPath, mode: 0o600)
     try check(try GateShutdownRequest.load(from: requestPath)?.id == request.id, "Shutdown nonce was not preserved")
+    let newerShutdown = try GateShutdownRequest(action: "shutdown")
+    try check(!(try newerShutdown.withdraw(at: requestPath)), "Withdrawal removed another shutdown request")
+    try check(try request.withdraw(at: requestPath) && GateShutdownRequest.load(from: requestPath) == nil,
+              "Failed bootstrap left a shutdown request queued for later execution")
+    try check(!(try request.withdraw(at: requestPath)), "Consumed shutdown was reported as withdrawn")
+    try rejects { try GateShutdownRequest.validate(paused: true, pendingLaunch: nil, phase: .idle) }
+    try rejects { try GateShutdownRequest.validate(paused: false, pendingLaunch: nil, phase: .quitting) }
+    for phase in [GateShutdownPhase.idle, .submitted, .aborted] {
+        try GateShutdownRequest.validate(paused: false, pendingLaunch: nil, phase: phase)
+    }
     var oldRequest = try JSONSerialization.jsonObject(with: Data(JSON.encode(request).utf8)) as! [String: Any]
     oldRequest["boot_id"] = "previous-boot"
     try AtomicFile.write(String(decoding: JSONSerialization.data(withJSONObject: oldRequest), as: UTF8.self), to: requestPath, mode: 0o600)

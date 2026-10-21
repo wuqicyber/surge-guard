@@ -95,6 +95,13 @@ Read README.md first. It is the operational contract for all three components.
   acknowledge update pause while a launch remains unsettled. Publish shutdown
   requests before bootstrap, serialize submission/consumption, and preserve the
   session on retries after both quit failure and macOS cancellation.
+- Bind pending launches to the observing Gate instance and recorded native child
+  PID/birth time. A dead/reused child permits failure recovery; a lost observer
+  without child evidence requires explicit nonce-bound `recover-launch` attestation
+  or observed startup/new boot, never timeout-based cancellation. Keep shutdown
+  requests responsive: decline and remove requests blocked by unresolved launches,
+  and withdraw an unconsumed request if bootstrap fails. Do not acknowledge update
+  pause while a launch is active or orphaned.
 - Preserve the ordinary user's ownership of Surge.app for Sparkle. Launcher
   fstat/path consistency checks reduce replacement races but do not make signed
   validation and pathname exec atomic; document that remaining boundary.

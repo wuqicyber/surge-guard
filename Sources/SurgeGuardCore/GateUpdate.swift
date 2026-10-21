@@ -38,7 +38,7 @@ public struct GateUpdate: Codable, Equatable {
 
     public func acknowledged(by update: GateUpdate?, state: String, fresh: Bool) -> Bool {
         fresh && update == self && (paused ? state == "update_paused" :
-            !["update_paused", "update_pausing", "launch_pending", "shutting_down", "shutdown_requested", "error", "recovery_failed"].contains(state))
+            !["update_paused", "update_pausing", "launch_pending", "launch_recovery_required", "shutting_down", "shutdown_requested", "error", "recovery_failed"].contains(state))
     }
 }
 
@@ -70,15 +70,51 @@ public struct GatePendingLaunch: Codable, Equatable {
     public let id: UUID
     public let app: String
     public let bootId: String
+    public let observer: UUID?
+    public var child: SurgeProcess?
     public static var path: String { UserPaths.directory + "/pending-launch.json" }
-    public init(app: String) { id = UUID(); self.app = app; bootId = SystemClock.bootID }
+    public init(app: String, observer: UUID? = nil) {
+        id = UUID(); self.app = app; bootId = SystemClock.bootID; self.observer = observer
+    }
+
+    public enum Disposition { case settled, inFlight, failed, orphaned }
+    public func disposition(observer: UUID, callbackPending: Bool, appRunning: Bool, childIdentity: SurgeProcess?) -> Disposition {
+        if callbackPending { return .inFlight }
+        if appRunning { return .settled }
+        if let child { return child == childIdentity ? .inFlight : .failed }
+        return self.observer == observer ? .failed : .orphaned
+    }
+
+    public func save(at path: String = path) throws {
+        let fd = try UserPaths.lock(at: path + ".lock", timeout: 2)
+        defer { close(fd) }
+        guard try Self.load(from: path).map({ $0.id == id }) ?? true else {
+            throw GuardError("An earlier application launch has not settled")
+        }
+        try AtomicFile.write(try JSON.encode(self), to: path, mode: 0o600)
+    }
+
     public func complete(at path: String = path) throws {
+        let fd = try UserPaths.lock(at: path + ".lock", timeout: 2)
+        defer { close(fd) }
         if try Self.load(from: path)?.id == id { try FileManager.default.removeItem(atPath: path) }
+    }
+
+    public static func recover(id: UUID, observer: UUID, at path: String = path) throws {
+        let fd = try UserPaths.lock(at: path + ".lock", timeout: 2)
+        defer { close(fd) }
+        guard let request = try load(from: path), request.id == id, request.observer != observer, request.child == nil else {
+            throw GuardError("Launch recovery requires the exact orphaned request; inspect fresh Gate status")
+        }
+        try FileManager.default.removeItem(atPath: path)
     }
     public static func load(from path: String = path) throws -> GatePendingLaunch? {
         guard let data = try UserPaths.readPrivate(path) else { return nil }
         let value = try JSON.decode(Self.self, from: data)
-        guard GateConfiguration.validBundleID(value.app), !value.bootId.isEmpty else { throw GuardError("Invalid pending launch") }
+        guard GateConfiguration.validBundleID(value.app), !value.bootId.isEmpty,
+              value.child.map({ $0.pid > 1 && $0.startedSeconds > 0 && (0..<1_000_000).contains($0.startedMicroseconds) }) ?? true else {
+            throw GuardError("Invalid pending launch")
+        }
         return value.bootId == SystemClock.bootID ? value : nil
     }
 }
@@ -91,6 +127,17 @@ public struct GateShutdownRequest: Codable {
     public init(action: String) throws {
         guard ["restart", "shutdown"].contains(action) else { throw GuardError("Invalid shutdown action") }
         id = UUID(); self.action = action; bootId = SystemClock.bootID
+    }
+    public static func validate(paused: Bool, pendingLaunch: GatePendingLaunch?, phase: GateShutdownPhase) throws {
+        guard !paused else { throw GuardError("Finish or cancel the Surge update and resume Gate before ordered shutdown") }
+        guard pendingLaunch == nil else { throw GuardError("Application launch is unresolved; inspect Gate status and settle/recover it before ordered shutdown") }
+        guard phase == .idle || phase.canRetry else { throw GuardError("Ordered shutdown is still in progress") }
+    }
+    // The caller holds request.lock during submission, consumption and withdrawal.
+    @discardableResult public func withdraw(at path: String = path) throws -> Bool {
+        guard try Self.load(from: path)?.id == id else { return false }
+        try FileManager.default.removeItem(atPath: path)
+        return true
     }
     public static func load(from path: String = path) throws -> GateShutdownRequest? {
         guard let data = try UserPaths.readPrivate(path) else { return nil }

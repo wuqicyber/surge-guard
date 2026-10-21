@@ -355,13 +355,36 @@ request ID and fresh service status are required for acknowledgement; a timeout
 retains the request and reports failure, not permission to start updating.
 An operation already in progress must settle before the pause is acknowledged.
 A launch timeout does not cancel an NSWorkspace request or the dedicated launcher.
-`pending-launch.json` preserves this uncertainty across Gate restarts, and the menu
-shows a pending pause until the callback, verified app startup, or launcher exit
-settles it. If Gate crashed and completion cannot be established, automatic
-recovery and pause acknowledgement remain blocked until the app appears or a
-reboot clears the previous boot's request; deleting the marker is not a safe
-cancellation procedure.
+`pending-launch.json` records the observing Gate instance and, for the dedicated
+launcher, its PID and process birth time. After Gate restarts, verified app startup
+settles the request; a recorded launcher that has exited (including a reused PID)
+allows recovery after a 30-second failure backoff. A live launcher or callback
+keeps the pause unacknowledged.
+
+If Gate crashes before recording the child identity, or loses an NSWorkspace
+callback, an absent application alone cannot establish cancellation. Gate reports
+`launch_recovery_required` with the application and request ID instead of waiting
+silently forever. After independently confirming that the old launch finished,
+failed or was cancelled, run as the normal user:
+
+```sh
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" status --json
+"$HOME/Library/Application Support/SurgeGuard/bin/surge-gate" recover-launch REQUEST_UUID --confirm-settled
+```
+
+Use the exact `pending_launch.id` from fresh status. This explicit attestation
+clears only that orphaned request; it does not cancel LaunchServices work or clear
+an existing update pause. If completion cannot be established, keep waiting or
+reboot to invalidate the previous boot's request. A timeout or manual deletion
+is not proof of cancellation. Ordered shutdown rejects unresolved launches with
+an explicit error; already queued requests are consumed and declined without
+quitting apps, so they cannot unexpectedly execute after later launch recovery.
 Ordered shutdown is refused while update pause is active.
+If service startup fails before a queued shutdown is consumed, its exact nonce is
+withdrawn so it can be retried. A consumed request's outcome must be checked in
+status/logs. Gate configuration/session/status reads are bounded, reject symlinks
+and special files, and require files owned by the current user without group or
+other access (normally mode `0600`).
 
 The user CLI exposes `update-pause` and `update-resume`. Actual recovery failures
 retry no earlier than 30 seconds; waiting for verified blocking does not consume

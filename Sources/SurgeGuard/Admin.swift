@@ -232,7 +232,12 @@ enum Admin {
             try waitForStatus(expectAllowed: expectAllowed)
             return
         }
-        let previous = StatusReport.read().snapshot?.pid
+        let previous = try StatusReport.servicePID(Command.run("/bin/launchctl", ["print", "system/" + Paths.label]))
+        guard let previous else {
+            try Command.checked("/bin/launchctl", ["kickstart", "system/" + Paths.label])
+            try waitForStatus(expectAllowed: expectAllowed)
+            return
+        }
         // launchd sends TERM, allowing the daemon to install block rules.
         try Command.checked("/bin/launchctl", ["kill", "SIGTERM", "system/" + Paths.label])
         EventLog.write("restart_requested", message: "Requested normal stop; launchd KeepAlive restarts the service")

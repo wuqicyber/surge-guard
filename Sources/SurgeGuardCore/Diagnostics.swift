@@ -83,13 +83,7 @@ public struct StatusReport: Codable {
             try RootFiles.verify(Paths.publicState, directory: true)
             try RootFiles.verify(Paths.snapshot)
             let snapshot = try JSON.decode(GuardSnapshot.self, from: Data(contentsOf: URL(fileURLWithPath: Paths.snapshot)))
-            let running = try self.serviceRunning(service, pid: snapshot.pid)
-            guard running else { return StatusReport(state: "stopped", daemonRunning: false, snapshot: snapshot, reason: "daemon_not_running") }
-            guard snapshot.fresh() else {
-                return StatusReport(state: "unknown", daemonRunning: true, snapshot: snapshot, reason: "status_or_pf_audit_expired")
-            }
-            return StatusReport(state: snapshot.allowed ? "allowed" : "blocked", daemonRunning: true,
-                                snapshot: snapshot, reason: snapshot.reasons.joined(separator: "; "))
+            return try evaluate(service: service, snapshot: snapshot)
         } catch {
             if !serviceRunning, let marker = try? readUnlockMarker(), marker == SystemClock.bootID, !marker.isEmpty {
                 return StatusReport(state: "unlocked", daemonRunning: false, snapshot: nil, reason: "manual_unlock_until_start_or_reboot")
@@ -98,21 +92,42 @@ public struct StatusReport: Codable {
         }
     }
 
+    public static func evaluate(service: CommandResult, snapshot: GuardSnapshot) throws -> StatusReport {
+        guard let pid = try servicePID(service) else {
+            return StatusReport(state: "stopped", daemonRunning: false, snapshot: snapshot, reason: "daemon_not_running")
+        }
+        guard pid == snapshot.pid else {
+            return StatusReport(state: "unknown", daemonRunning: true, snapshot: snapshot, reason: "status_process_mismatch")
+        }
+        guard snapshot.fresh() else {
+            return StatusReport(state: "unknown", daemonRunning: true, snapshot: snapshot, reason: "status_or_pf_audit_expired")
+        }
+        return StatusReport(state: snapshot.allowed ? "allowed" : "blocked", daemonRunning: true,
+                            snapshot: snapshot, reason: snapshot.reasons.joined(separator: "; "))
+    }
+
     public static func serviceLoaded(_ service: CommandResult) throws -> Bool {
         _ = try serviceRunning(service)
         return service.status == 0
     }
 
     public static func serviceRunning(_ service: CommandResult, pid: Int32? = nil) throws -> Bool {
+        guard let actual = try servicePID(service) else { return false }
+        return pid.map { $0 == actual } ?? true
+    }
+
+    public static func servicePID(_ service: CommandResult) throws -> Int32? {
         guard service.status == 0 else {
-            if service.status == 113 && service.combined.contains("Could not find service") { return false }
+            if service.status == 113 && service.combined.contains("Could not find service") { return nil }
             throw GuardError("launchctl status \(service.status): \(service.combined.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let lines = service.output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-        guard lines.contains("state = running") else { return false }
-        let pids = lines.filter { $0.hasPrefix("pid = ") }.compactMap { Int32($0.dropFirst(6)) }
-        guard pids.count == 1, pids[0] > 0 else { throw GuardError("Running service has no unique valid PID") }
-        return pid.map { $0 == pids[0] } ?? true
+        guard lines.contains("state = running") else { return nil }
+        let pids = lines.filter { $0.hasPrefix("pid = ") }
+        guard pids.count == 1, let pid = Int32(pids[0].dropFirst(6)), pid > 1 else {
+            throw GuardError("Running service has no unique valid PID")
+        }
+        return pid
     }
 
     private static func readUnlockMarker() throws -> String {

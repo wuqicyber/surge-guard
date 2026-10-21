@@ -157,7 +157,7 @@ func restartService() throws {
         print("SurgeGate was stopped; service startup confirmed.")
     } else {
         try Command.checked("/bin/launchctl", ["kill", "SIGTERM", service])
-        try waitForFreshService(after: previous.running ? previous.status.pid : nil)
+        try waitForFreshService(after: previous.servicePID)
         print("SurgeGate restart confirmed by fresh service status.")
     }
 }
@@ -167,16 +167,31 @@ func queueShutdown(_ action: String) throws {
     let fd = try lock("request.lock")
     do {
         defer { close(fd) }
-        guard try GateUpdate.load()?.paused != true else { throw GuardError("Finish or cancel the Surge update and resume Gate before ordered shutdown") }
         let report = try readStatus()
-        guard !(report.running && report.status.state == "shutting_down") else { throw GuardError("Ordered shutdown is still in progress") }
+        let quitting = report.servicePID == report.status.pid && report.status.bootId == SystemClock.bootID && report.status.state == "shutting_down"
+        try GateShutdownRequest.validate(paused: GateUpdate.load()?.paused == true, pendingLaunch: GatePendingLaunch.load(),
+                                         phase: quitting ? .quitting : .idle)
         guard try GateShutdownRequest.load() == nil else { throw GuardError("A shutdown request is already queued") }
         // Publish before bootstrap so a new service cannot restore applications first.
         try UserPaths.write(try JSON.encode(request), to: shutdownPath)
     }
     do { try ensureServiceLoaded(waitForRunning: true) }
-    catch { throw GuardError("Shutdown request retained, but service startup failed: \(error). Inspect status before retrying.") }
+    catch {
+        let fd = try lock("request.lock", timeout: 2)
+        defer { close(fd) }
+        let withdrawn = try request.withdraw()
+        throw GuardError("Service startup failed: \(error). \(withdrawn ? "Queued shutdown withdrawn; retry when the service is available." : "Request already consumed; inspect status/logs before retrying.")")
+    }
     print("Queued normal shutdown. Unsaved-document dialogs may need your attention; after macOS cancels a submitted request, explicitly retry or restart Gate to resume recovery.")
+}
+
+func recoverLaunch(_ id: UUID) throws {
+    let report = try readStatus()
+    guard report.fresh, report.status.state == "launch_recovery_required", report.status.pendingLaunch?.id == id,
+          let observer = report.status.runId else { throw GuardError("Inspect fresh Gate status for the exact orphaned launch ID") }
+    try GatePendingLaunch.recover(id: id, observer: observer)
+    event("launch_recovery_confirmed", "User confirmed the orphaned launch finished, failed or was cancelled; Gate may resume", details: ["request_id": id.uuidString])
+    print("Orphaned launch cleared on your explicit confirmation. Inspect Gate status; an existing update pause remains in effect.")
 }
 
 func uninstallService() throws {

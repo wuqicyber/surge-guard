@@ -1147,3 +1147,53 @@ preserves Sparkle compatibility, not isolation from malicious same-user writers.
 An unresolved launch left by a crashed Gate conservatively blocks recovery and
 pause acknowledgement until the app is observed or the boot changes; deleting
 its marker is not proof that the launch was cancelled.
+
+## 2026-10-20 — follow-up review of 0f7038c
+
+The preceding entry's indefinite pending-launch limitation is addressed by this
+source revision. Launch records now retain their observing Gate instance and,
+where available, the native launcher's PID/birth time. A recorded dead or reused
+child permits recovery with failure backoff. Missing observer/child evidence is
+reported as `launch_recovery_required`; an exact-nonce command requires explicit
+user confirmation that the old launch finished, failed or was cancelled. No
+timeout is treated as LaunchServices cancellation or update-pause acknowledgement.
+Queued shutdowns are declined and removed while a launch is unresolved. Failed
+bootstrap withdraws only its own unconsumed shutdown request.
+
+Also corrected:
+
+- A changed Surge candidate set while allowed is rejected before signature
+  validation can replace the old watcher and preserve stale route trust.
+- Restart confirmation uses the actual launchctl PID. A snapshot from a different
+  process reports unknown/running, rather than stopped. Malformed or unreadable
+  Gate status does not prevent service management through a valid service query.
+- Gate configuration/session/status reads are private and bounded. Event files
+  and locks open nonblocking before rejecting special files; log-reader pipe
+  ends are explicitly closed on all return paths.
+- Menu and event text distinguish an orphaned launch, an update pause request
+  and an acknowledged pause. Pending launch polling no longer rewrites status
+  at ten times per second.
+
+Performed without deploying or restarting services:
+
+- Final `./scripts/check.sh` passed: all 50 Swift check groups, native C launcher
+  consistency checks, release build with warnings as errors, generic policy
+  validation, CLI help/log formatting, shell syntax and `git diff --check`.
+- Temporary-file/native-child regressions cover living/exited/reused launcher
+  identities across observer restart; legacy/orphaned launch records; exact-nonce
+  recovery, old completions and blocked shutdowns; bootstrap-request withdrawal;
+  malformed/duplicate service PIDs and stale snapshots; FIFO rejection with a
+  bounded subprocess; repeated log-reader descriptor counts; conservative menu
+  and pause-request log text. No fixture quits a real application or changes PF.
+- Both newly built `status --json` commands returned parseable JSON when reading
+  the existing services. The new SwiftBar renderer produced its section with
+  Gate and ordered-shutdown entries. Only schema/state summaries were retained.
+- The original untracked `package-lock.json` remains unmodified; its SHA-256 was
+  checked before and after the work.
+
+Not performed: no menu/service installation, Surge quit/restart, live recovery
+command, real Gate crash, delayed LaunchServices failure injection, power action,
+Sparkle update or live PF mutation. PF checks were parse-only. State/file/native
+child tests do not certify the full live crash/shutdown sequence or packet-level
+protection. The signed-pathname execution race and UDP/early-boot limitations
+remain as documented; ordinary-user ownership of Surge.app was not changed.
