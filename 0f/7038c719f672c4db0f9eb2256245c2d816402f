@@ -1,0 +1,65 @@
+AGENTS.md
+  s_932087378bf127::t_91dad334a608ae 93-102
+README.md
+  s_932087378bf127::t_4713196319e77d 42,132-135,170,172-179,315-316,322-325,334-336,357-363,414-416,424-428,546-554
+README.zh-CN.md
+  s_932087378bf127::t_7128a32255a9c7 23-28,81-84,88-93,119,176-177,264-266,274-276,309-310,315-317
+Sources/SurgeGate/GateAdmin.swift
+  s_932087378bf127::t_e2f5d87160e40b 71,103,109-111,113-114,117,126,130-133,141-150,153-157,160-161,166-175,177-179,184-187
+Sources/SurgeGate/GateService.swift
+  s_932087378bf127::t_989e0e241abc2c 28-47,53-55,58-64,122-125,130-134,163-164,170,172-180,198-203,209,215,267,279-297,299-300,302-307,312-314,342
+Sources/SurgeGate/main.swift
+  s_932087378bf127::t_aab27233643906 28-30,41-42
+Sources/SurgeGuard/CLI.swift
+  s_932087378bf127::t_1d80529ca772c2 63-66,157-158,163,170-174
+Sources/SurgeGuard/SwiftBar.swift
+  s_932087378bf127::t_635631f009cd2a 60,94-98,105,133-138
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_932087378bf127::t_6b0bc9f87dd782 68-72,101-105,112-115
+Sources/SurgeGuardCore/EgressObservation.swift
+  s_932087378bf127::t_20b9fe7a64cd58 16,29-34,52-84,202-206,208-218,221-224,226-237,239-245,247-250,252-253,255-266,268
+Sources/SurgeGuardCore/GateConfiguration.swift
+  s_932087378bf127::t_e84cd4ec7538e7 23-38,150-152
+Sources/SurgeGuardCore/GateUpdate.swift
+  s_932087378bf127::t_0afdfefbf8ecf4 36,41,67-107
+Sources/SurgeGuardCore/PacketAudit.swift
+  s_932087378bf127::t_7df77f92d71243 226,231,236-253
+Sources/SurgeLaunch/LaunchFile.h
+  s_932087378bf127::t_e17df4121e04d2 1-31
+Sources/SurgeLaunch/main.c
+  s_932087378bf127::t_d81f117db4ce4f 11,28-36,62-73
+Tests/SurgeGuardTests/main.swift
+  s_932087378bf127::t_1c170d2ff68df2 230-231,427-431,436,512-524,678,703,713-725,1004-1135
+Tests/SurgeLaunchTests/main.c
+  s_932087378bf127::t_2b5997c86335f8 1-48
+docs/verification.md
+  s_932087378bf127::t_abc68474d64f25 1091-1149
+integrations/swiftbar/surge-guard-action.sh
+  s_932087378bf127::t_b0b5cb98748dd8 25,37,40,45-49,100-102,106-110
+scripts/check.sh
+  s_932087378bf127::t_927b9f2731ccff 6-9
+Sources/SurgeGuard/Admin.swift
+  s_932087378bf127::t_491bcb9a4ae2d4 68,88,112
+Sources/SurgeGuardCore/Configuration.swift
+  s_932087378bf127::t_f943afda10e06c 3,98-105,145-155
+Sources/SurgeGuardCore/System.swift
+  s_932087378bf127::t_cb63a1627efd52 14,17-19,21-32,34-42,44-80,84-106,108-116,118-137
+scripts/install-user.sh
+  s_932087378bf127::t_4d5b4a97246ede 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "0f7038c719f672c4db0f9eb2256245c2d816402f",
+  "prompts": {},
+  "sessions": {
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
