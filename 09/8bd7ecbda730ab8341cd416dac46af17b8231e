@@ -1,0 +1,14 @@
+Sources/SurgeGate/main.swift
+  h_debc74f7d1c6f4 165-169,174,179,236,243-244,247,249,502-524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "098bd7ecbda730ab8341cd416dac46af17b8231e",
+  "prompts": {},
+  "humans": {
+    "h_debc74f7d1c6f4": {
+      "author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
