@@ -162,18 +162,21 @@ func lock(_ name: String, timeout: TimeInterval = 0) throws -> Int32 {
     return fd
 }
 
-func saveSession(_ config: GateConfiguration, pending: [String]) throws {
-    try UserPaths.write(try JSON.encode(GateSession(apps: appIDs(config), pending: pending)), to: UserPaths.session)
+func saveSession(_ config: GateConfiguration, pending: [String], preserveSavedApps: Bool = false) throws {
+    let existing = preserveSavedApps ? ((try? GateSession.load().apps) ?? []) : []
+    let excluded = Set(config.excludedApps + ["com.apple.finder", "com.nssurge.surge-mac"])
+    let apps = Array(Set(try appIDs(config) + existing)).filter { !excluded.contains($0) }.sorted()
+    try UserPaths.write(try JSON.encode(GateSession(apps: apps, pending: pending)), to: UserPaths.session)
 }
 
 let shutdownPath = UserPaths.directory + "/shutdown-request.json"
 
-func shutdown(_ action: String, config: GateConfiguration, pending: [String]) throws {
+func shutdown(_ action: String, config: GateConfiguration, pending: [String], preserveSavedApps: Bool = false) throws {
     guard ["restart", "shutdown"].contains(action) else { throw GuardError("Invalid shutdown action") }
     guard ["allowed", "blocked"].contains(StatusReport.read().state) else {
         throw GuardError("System guard state is not verified; no applications were asked to quit")
     }
-    try saveSession(config, pending: pending)
+    try saveSession(config, pending: pending, preserveSavedApps: preserveSavedApps)
     event("shutdown_started", "Requesting normal application quits; no force termination")
     let excluded = Set(config.excludedApps + ["com.apple.finder", "com.nssurge.surge-mac"])
     let apps = try applications().filter { !excluded.contains($0.bundleIdentifier ?? "") }
@@ -230,18 +233,20 @@ func run() throws {
                 lastUpdate = update
                 if let update { event(update.paused ? "update_paused" : "update_resumed", update.reason) }
             }
-            if FileManager.default.fileExists(atPath: shutdownPath), !shutdownAccepted {
+            if FileManager.default.fileExists(atPath: shutdownPath), (!shutdownAccepted || shutdownFailure != nil) {
                 let request = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: shutdownPath))) as? [String: String]
                 try FileManager.default.removeItem(atPath: shutdownPath)
                 guard update?.paused != true else { throw GuardError("Shutdown request declined while Surge update is paused") }
                 guard let action = request?["action"], let requested = request?["boot_id"], requested == SystemClock.bootID else {
                     throw GuardError("Discarded invalid/previous-boot shutdown request")
                 }
+                let retryingAborted = shutdownFailure != nil
+                shutdownFailure = nil
                 try publish("shutting_down", "Waiting for applications to quit", pending: pending)
                 shutdownAccepted = true
-                do { try shutdown(action, config: config, pending: pending) }
+                do { try shutdown(action, config: config, pending: pending, preserveSavedApps: retryingAborted) }
                 catch {
-                    shutdownFailure = "\(error). Session retained; restart SurgeGate to resume recovery"
+                    shutdownFailure = "\(error). Session retained; save documents and retry ordered shutdown, or restart SurgeGate to resume recovery"
                     event("shutdown_aborted", shutdownFailure!)
                 }
             }
@@ -494,8 +499,29 @@ do {
     case "shutdown":
         guard args.count == 3, args[1] == "--action", ["restart", "shutdown"].contains(args[2]) else { throw GuardError("Usage: shutdown --action restart|shutdown") }
         guard try GateUpdate.load()?.paused != true else { throw GuardError("Finish or cancel the Surge update and resume Gate before ordered shutdown") }
-        guard try Command.run("/bin/launchctl", ["print", "gui/\(getuid())/\(UserPaths.label)"]).output.contains("state = running") else { throw GuardError("SurgeGate service must be running") }
-        guard !FileManager.default.fileExists(atPath: shutdownPath) else { throw GuardError("A shutdown request is already queued") }
+        let domain = "gui/\(getuid())"
+        let service = "\(domain)/\(UserPaths.label)"
+        if !(try Command.run("/bin/launchctl", ["print", service]).output.contains("state = running")) {
+            guard FileManager.default.fileExists(atPath: UserPaths.plist) else { throw GuardError("SurgeGate service must be running") }
+            try Command.checked("/bin/launchctl", ["enable", service])
+            try Command.checked("/bin/launchctl", ["bootstrap", domain, UserPaths.plist], timeout: 10)
+            let deadline = SystemClock.seconds + 5
+            while !(try Command.run("/bin/launchctl", ["print", service]).output.contains("state = running")) && SystemClock.seconds < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            guard try Command.run("/bin/launchctl", ["print", service]).output.contains("state = running") else {
+                throw GuardError("SurgeGate service must be running")
+            }
+        }
+        if FileManager.default.fileExists(atPath: shutdownPath) {
+            let existing = (try? Data(contentsOf: URL(fileURLWithPath: shutdownPath)))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
+            if existing?["boot_id"] != SystemClock.bootID {
+                try? FileManager.default.removeItem(atPath: shutdownPath)
+            } else {
+                throw GuardError("A shutdown request is already queued")
+            }
+        }
         let request = ["action": args[2], "boot_id": SystemClock.bootID]
         try UserPaths.write(String(decoding: JSONSerialization.data(withJSONObject: request), as: UTF8.self), to: shutdownPath)
         print("Queued normal shutdown. Unsaved-document dialogs may need your attention; check SurgeGate logs if aborted.")
