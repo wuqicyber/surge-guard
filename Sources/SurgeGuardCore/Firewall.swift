@@ -195,6 +195,14 @@ public final class Firewall {
         knownAddresses.formUnion(try Probe.addresses().filter { !$0.loopback }.map(\.address))
     }
 
+    public func clearStates(addresses: () throws -> Set<String>, clear: (String) throws -> Void) throws {
+        let current = Result { try addresses() }
+        if case .success(let addresses) = current { knownAddresses.formUnion(addresses) }
+        // Enumeration failure must not skip cleanup of addresses already observed while allowed.
+        for address in knownAddresses.sorted() { try clear(address) }
+        knownAddresses = try current.get()
+    }
+
     public func readRules() throws -> String {
         try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-sr"])
     }
@@ -217,13 +225,10 @@ public final class Firewall {
         guard actual.contains("surge-guard-block") else { throw GuardError("Block rule did not load") }
         // States precede PF rule evaluation. Terminate states involving this
         // Mac, including old interface addresses; never flush all PF state.
-        let currentAddresses = Set(try Probe.addresses().filter { !$0.loopback }.map(\.address))
-        knownAddresses.formUnion(currentAddresses)
-        for address in knownAddresses.sorted() {
+        try clearStates(addresses: { Set(try Probe.addresses().filter { !$0.loopback }.map(\.address)) }) { address in
             try Command.checked("/sbin/pfctl", ["-k", address], timeout: 5)
             try Command.checked("/sbin/pfctl", ["-k", address.contains(":") ? "::/0" : "0.0.0.0/0", "-k", address], timeout: 5)
         }
-        knownAddresses = currentAddresses
         expectedRules = actual
         let cleared = SystemClock.seconds
         if let blockID {

@@ -53,9 +53,10 @@ public struct Configuration: Codable, Equatable {
             guard let url = URLComponents(string: check.url),
                   ["https", "http"].contains(url.scheme), url.host?.isEmpty == false,
                   url.user == nil, url.password == nil, url.fragment == nil,
+                  !check.url.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
                   check.url.count <= 2048, urls.insert(check.url).inserted,
                   validName(check.requiredGroup) else {
-                throw GuardError("Each route check needs a unique HTTP(S) URL without credentials and an exact group")
+                throw GuardError("Each route check needs a unique HTTP(S) URL without credentials or control characters and an exact group")
             }
             if let allowed = check.allowedFinalPolicies {
                 guard !allowed.isEmpty, allowed.count <= 128, Set(allowed).count == allowed.count,
@@ -93,6 +94,13 @@ public struct Configuration: Codable, Equatable {
     public static func load() throws -> Configuration {
         try RootFiles.verify(Paths.configuration)
         return try decode(Data(contentsOf: URL(fileURLWithPath: Paths.configuration)))
+    }
+
+    public func encoded() throws -> String {
+        var text = try JSON.encode(self, pretty: true)
+        if text.utf8.count > 65_536 { text = try JSON.encode(self) }
+        _ = try Self.decode(Data(text.utf8))
+        return text
     }
 
     // Only installation may supply a missing policy after creating the state directory.

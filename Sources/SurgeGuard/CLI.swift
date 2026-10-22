@@ -197,7 +197,7 @@ enum CLI {
             try FileManager.default.createDirectory(at: userDirectory, withIntermediateDirectories: true,
                                                      attributes: [.posixPermissions: 0o700])
             if !FileManager.default.fileExists(atPath: draft) {
-                try JSON.encode(policy([]), pretty: true).write(toFile: draft, atomically: true, encoding: .utf8)
+                try policy([]).encoded().write(toFile: draft, atomically: true, encoding: .utf8)
             }
             try Command.checked("/usr/bin/open", ["-a", "TextEdit", draft])
         default:
@@ -225,10 +225,11 @@ enum CLI {
             case "configure":
                 guard args.count == 2 else { throw GuardError("Usage: sudo configure FILE") }
                 let config = try Configuration.decode(Data(contentsOf: URL(fileURLWithPath: args[1])))
+                let encoded = try config.encoded()
                 if config.usesPersistentTCP { try Admin.prepareDedicatedGroup() }
                 try RootFiles.preparePublicState()
                 try Recovery.save(kind: "policy")
-                try RootFiles.write(try JSON.encode(config, pretty: true), to: Paths.configuration, mode: 0o644)
+                try RootFiles.write(encoded, to: Paths.configuration, mode: 0o644)
                 EventLog.write("configuration_installed", message: "Policy validated and installed", details: ["mode": config.mode])
                 print("Policy installed. A running daemon reloads it automatically; inspect status.")
             case "logs":

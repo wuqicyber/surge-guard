@@ -58,6 +58,8 @@ Read README.md first. It is the operational contract for all three components.
   of a guessed duration or repeated forced restarts. Recovery must work offline.
   Interface enumeration failure is an error, never an empty state-cleanup list;
   load blocking rules before that query and do not claim verified cleanup on failure.
+  Still clear remembered addresses when enumeration fails, and retain them on any
+  cleanup failure so retries do not forget old states.
 - Independent emergency/log actions must not query the guard executable, even
   for help/capabilities. A service-query error is not service absence: refuse
   anchor clearing on unexpected errors or a running job without a valid PID.
@@ -82,8 +84,11 @@ Read README.md first. It is the operational contract for all three components.
   before Surge request queries.
   Rejoin the supervisor process group before exec so launchd reaps the capture
   child after crashes. Publish its process group before spawning; stop waits for
-  the group even if the child PID was never published. Bound diagnostic input and
-  queued work, and keep the live-pipe-before-EOF regression. Never equate a running collector, zero reported drops,
+  the group even if the child PID was never published. Bind new group records to
+  native supervisor birth time so PID reuse is not an
+  unrelated group's stop dependency. Missing leaders do not prove group exit.
+  Bound diagnostic input and queued work, and keep the live-pipe-before-EOF
+  regression. Never equate a running collector, zero reported drops,
   request-window overlap or absent request match with verified no-bypass coverage.
   Raw packet prefixes may contain payload; keep captures/request metadata private.
 - Optional `persistent_tcp` restricts ready-state non-loopback TCP to the verified
@@ -115,6 +120,9 @@ Read README.md first. It is the operational contract for all three components.
 - Preserve the ordinary user's ownership of Surge.app for Sparkle. Launcher
   fstat/path consistency checks reduce replacement races but do not make signed
   validation and pathname exec atomic; document that remaining boundary.
+- Validate serialized policy/session checkpoints with the reader's limits before
+  publishing. Preserve prior sessions on overflow, and let only the Gate lock
+  owner publish run failures; a failed duplicate run must not overwrite status.
 - `install-user.sh --menu-only` and `--recovery-only` update independent menu
   files only; neither queries/restarts services nor replaces the Gate binary.
 

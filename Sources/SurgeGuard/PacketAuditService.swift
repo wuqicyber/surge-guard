@@ -225,6 +225,8 @@ final class PacketAuditService {
         umask(0o077)
         guard getpgrp() == getpid() else { throw GuardError("Packet audit requires its own supervisor process group") }
         snapshot.processGroup = getpgrp()
+        guard let identity = try SurgeProcess.read(pid: getpid()) else { throw GuardError("Cannot identify audit supervisor") }
+        snapshot.supervisorIdentity = identity
         if let previous = try? String(contentsOfFile: PacketAudit.snapshot) {
             try event("audit_capture_gap", "New capture session; traffic between sessions and overwritten history cannot be reconstructed",
                       ["previous_snapshot": String(previous.prefix(8192))])

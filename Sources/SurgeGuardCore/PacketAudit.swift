@@ -21,12 +21,32 @@ public enum PacketAudit {
         }
     }
 
-    public static func waitForProcessGroupExit(_ group: pid_t, timeout: TimeInterval = 20) throws {
+    public static func waitForProcessGroupExit(_ group: pid_t, identities: [SurgeProcess] = [], timeout: TimeInterval = 20) throws {
         guard group > 1, group != getpgrp() else { throw GuardError("Unsafe capture process group") }
+        guard identities.allSatisfy({ $0.pid == group }) else { throw GuardError("Capture group identity mismatch") }
         let deadline = SystemClock.seconds + timeout
         while kill(-group, 0) == 0 || errno != ESRCH {
+            // XNU reserves surviving group IDs; a different leader birth proves the old group is gone.
+            if !identities.isEmpty, let current = try SurgeProcess.read(pid: group), !identities.contains(current) { return }
             guard SystemClock.seconds < deadline else { throw GuardError("Capture process group has not exited; refusing to replace recording files") }
             usleep(50_000)
+        }
+    }
+
+    public static func waitForCaptureExit(groups: [pid_t: [SurgeProcess]], legacyPIDs: Set<pid_t>, timeout: TimeInterval = 20) throws {
+        for (group, identities) in groups { try waitForProcessGroupExit(group, identities: identities, timeout: timeout) }
+        // Older capture children may have their own group, independent of the observed supervisor.
+        for pid in legacyPIDs {
+            guard pid > 1, pid != getpid() else { throw GuardError("Unsafe capture child PID") }
+            let deadline = SystemClock.seconds + timeout
+            while true {
+                if kill(pid, 0) != 0 {
+                    guard errno == ESRCH else { throw GuardError("Cannot confirm capture child exit") }
+                    break
+                }
+                guard SystemClock.seconds < deadline else { throw GuardError("Capture child has not exited; refusing to replace recording files") }
+                usleep(50_000)
+            }
         }
     }
 
@@ -104,7 +124,8 @@ public struct PacketCaptureRange: Codable {
 
     public init(file: String, readError: String? = nil) { self.file = file; self.readError = readError }
 
-    public static func read(_ path: String, owner: uid_t = 0, maximumBytes: Int64) throws -> PacketCaptureRange {
+    // Retained segments can predate a capacity reduction; allow the largest supported 4096 MB / 8 ring segment.
+    public static func read(_ path: String, owner: uid_t = 0, maximumBytes: Int64 = 512_000_000 + 65_536) throws -> PacketCaptureRange {
         let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { throw GuardError("Cannot open capture") }
         var before = stat()
@@ -222,6 +243,7 @@ public struct PacketAuditSnapshot: Codable {
     public var pid = getpid()
     public var capturePid: Int32?
     public var processGroup: Int32?
+    public var supervisorIdentity: SurgeProcess?
     public var checkedAt = Date()
     public var checkedUptime = SystemClock.seconds
     public var startedAt = Date()

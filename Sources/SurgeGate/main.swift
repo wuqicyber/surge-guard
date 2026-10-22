@@ -25,7 +25,7 @@ Run as your normal user. No Python, force-kill or broad process-name matching.
 
 do {
     let args = Array(CommandLine.arguments.dropFirst())
-    guard let action = args.first, !["help", "--help", "-h"].contains(action) else { print(usage); exit(0) }
+    guard let action = try GateCommand.action(args) else { print(usage); exit(0) }
     guard geteuid() != 0 else { throw GuardError("Run SurgeGate without sudo") }
     let management = ["install", "setup", "start", "stop", "restart", "uninstall", "shutdown", "update-pause", "update-resume", "recover-launch"].contains(action)
         ? try lock("command.lock") : nil
@@ -46,29 +46,19 @@ do {
     case "stop": try stopService()
     case "restart": try restartService()
     case "update-pause", "update-resume":
-        guard args.count == 1 else { throw GuardError("Unexpected update mode arguments") }
         try updateMode(paused: action == "update-pause")
     case "recover-launch":
-        guard args.count == 3, let id = UUID(uuidString: args[1]), args[2] == "--confirm-settled" else {
-            throw GuardError("Usage: recover-launch UUID --confirm-settled (only after verifying the old launch is no longer in flight)")
-        }
-        try recoverLaunch(id)
+        try recoverLaunch(UUID(uuidString: args[1])!)
     case "edit-config":
         try Command.checked("/usr/bin/open", ["-a", "TextEdit", UserPaths.config])
     case "logs":
-        let flags = Array(args.dropFirst())
-        guard Set(flags).count == flags.count, flags.allSatisfy({ ["--json", "--follow"].contains($0) }) else { throw GuardError("Usage: logs [--follow] [--json]") }
         try LogReader.show(path: UserPaths.log, follow: args.contains("--follow"), json: args.contains("--json"))
     case "shutdown":
-        guard args.count == 3, args[1] == "--action", ["restart", "shutdown"].contains(args[2]) else { throw GuardError("Usage: shutdown --action restart|shutdown") }
         try queueShutdown(args[2])
     case "uninstall": try uninstallService()
     default: throw GuardError("Unknown command: \(action)")
     }
 } catch {
-    if CommandLine.arguments.dropFirst().first == "run" {
-        try? publish("error", String(describing: error), pending: [])
-    }
     event("command_failed", String(describing: error))
     fputs("surge-gate: \(error)\n", stderr)
     exit(1)

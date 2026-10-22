@@ -1278,3 +1278,234 @@ process and state fixtures do not certify the complete live shutdown or crash
 sequence. These fixes are in source/build artifacts, not the running services.
 The mutable signed-pathname execution boundary, UDP scope and early-boot limits
 remain unchanged; Surge.app ownership and Sparkle update behavior were preserved.
+
+## 2026-10-20 — fourth convergence review of 2818dec
+
+Reviewed the 24-file commit and connected paths across all four source components,
+CPcap, SwiftBar integrations, scripts, standalone tests and operational documents.
+Re-reviewed the final changes and their callers independently after implementation.
+The source/fixture review ended with no remaining actionable findings identified;
+this is not a proof of universal correctness or a new live protection acceptance.
+
+Corrected:
+
+- P1: an interface-enumeration failure in `Firewall.block()` skipped even the
+  addresses remembered while allowed. Blocking rules still load first; cleanup
+  now attempts remembered addresses before propagating the enumeration error.
+  No verified-cleanup timestamp is published on failure. Failed cleanup retains
+  the union of known/new addresses for retry.
+- P2: Gate could write a merged startup/session list exceeding its own 256-ID or
+  64-KiB reader limits, then fail on its next restart. Config reads now cover the
+  full documented per-list ID limits (256 KiB). Sessions allow 1024 IDs per list,
+  with 1-MiB session/status reads; every session writer validates encoded data
+  before replacement. Over-limit snapshots preserve the previous checkpoint.
+  Older Gate binaries retain their smaller limits; larger new checkpoints are
+  not downgrade-compatible without reducing the lists.
+- P2: pretty-printing an accepted compact policy could exceed the 64-KiB reader
+  limit after `configure`, leaving the daemon unable to load it. Policy writers
+  share a reader-validated serializer that uses compact JSON when indentation
+  would exceed the limit, and rejects genuinely oversized results before publish.
+- P2: an old audit snapshot's PGID could later be reused by an unrelated process
+  group, making stop/update wait for that group. New snapshots persist native
+  supervisor birth identity before child launch, and group waits recheck it.
+  An absent leader still does not establish group exit; legacy records without
+  birth evidence keep conservative waiting. Apple's [XNU PID allocation code](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_fork.c)
+  rejects IDs held by surviving process groups, supporting the reuse distinction.
+- P3: a duplicate `surge-gate run` that failed to acquire gate.lock overwrote the
+  real service's status from the top-level catch. It now only reports the error;
+  the service loop retains its own error publications while holding gate.lock.
+
+Specific review conclusions:
+
+- PacketAuditService's worker synchronously hands each line to the main queue,
+  but stop/tick do not join that worker or wait for child termination. The only
+  waitUntilExit is on the worker after pipe completion. No circular wait was
+  found. A disposable subprocess test floods a real stderr pipe, runs a bounded
+  synchronous command and signals stop on the main queue, then drains/reaps on
+  the worker. This tests the scheduling pattern, not a live root audit service.
+- Throwing Probe.addresses callers preserve failure semantics in CLI, daemon,
+  VIF verification and passive egress sampling. Dedicated-group reservation
+  retains the recorded free GID and refuses collisions/unrecorded existing groups.
+- Gate recover-launch/request consumption retain request.lock -> pending-record
+  lock ordering; no waiter holds a pending-record lock while requesting the
+  request lock. Pending records are re-observed before shutdown consumption.
+  Update acknowledgement, orphan recovery and shutdown retry contracts remain.
+- Rechecked candidate/route invalidation, verified status freshness, bounded
+  command pipes, audit rotation/process cleanup, recovery, passive domain lookup,
+  menu rendering and launcher consistency. No further actionable issue was found
+  in those reviewed paths after the fixes.
+
+Performed:
+
+- Final `./scripts/check.sh` exited zero: 57 Swift check groups, the native C
+  launcher group and the isolated release-Gate lock-contention regression (59
+  PASS groups total). Release compilation with warnings as errors, example
+  validation, CLI help/log formatting, shell syntax and git diff checks passed.
+  No build warning or error was reported.
+- Regression fixtures include failed address enumeration and cleanup retry;
+  maximum-length app IDs and 768 merged pending targets; serialized policy size
+  boundaries; preservation of an old checkpoint after rejected replacement;
+  live main-queue/pipe/child termination; native group identity mismatch, absent
+  leaders with surviving children, legacy snapshots and current group waiting.
+  All observed supervisor births are retained during stop: an older snapshot
+  cannot overwrite a replacement process identity obtained from the live query.
+- The release Gate executable is also run against an isolated Foundation home
+  with gate.lock held and a sentinel status. It must fail before app inventory or
+  launch work and leave the sentinel unchanged. No installed service is stopped.
+- Existing PF tests use parse-only `-n`; recovery/menu installers use fake tools
+  and temporary directories. No production packet recorder was started.
+- Read-only release CLI checks returned machine-readable status JSON (Guard
+  allowed; Gate running, fresh and ready). The SwiftBar section contained both
+  components, independent unlock and ordered restart/shutdown actions; no action
+  was executed. The original untracked package-lock.json SHA-256 still matched
+  `c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719`.
+
+Not performed: no live PF mutation, installed service/menu replacement, Surge
+quit/restart, group creation, Sparkle update, shutdown/reboot, or live crash/disk
+failure injection. Fixes remain in source/build artifacts and are not deployed.
+The signed-pathname exec race, UDP/early-boot scope and limitations of passive
+observations remain documented. package-lock.json is retained unchanged.
+
+## 2026-10-20 — follow-up review of the uncommitted fourth-round fixes
+
+Continued reviewing the working tree on 2818dec, including Gate launch/request
+interleavings, command argument conversion, recorder stop/upgrade compatibility,
+process-group identity, diagnostics backpressure, egress parsing and recovery.
+Found and corrected two additional P2 issues:
+
+- Foundation URLComponents accepts raw NUL in a route URL, while the command's
+  C argument conversion truncates at NUL. A query could therefore evaluate a
+  different URL from the configured one. Configuration validation now rejects
+  raw control characters; Command rejects NUL in executable paths and arguments
+  before allocating pipes or spawning. Pipe input still supports embedded NUL,
+  and percent-encoded URL data remains accepted.
+- Recorder stop skipped a legacy capture PID whenever it also knew a supervisor
+  process group. Older children can have a separate group, so group exit alone
+  cannot confirm their exit before replacement. Stop now retains every legacy
+  PID observed before/after unloading and waits for both groups and legacy
+  children. Missing birth evidence remains conservative; waiting never kills an
+  unrelated process or infers capture exit from supervisor exit.
+
+Performed:
+
+- Focused standalone checks passed. New fixtures cover raw NUL arguments and
+  executable paths, control-character route URLs, preserved NUL pipe data, and
+  a surviving legacy child after its supervisor group has drained.
+- Full `./scripts/check.sh` exited zero: 58 Swift groups, the native C launcher
+  group and isolated release-Gate contention check, for 60 PASS groups total.
+  Release warnings-as-errors build, CLI examples/help, shell syntax and diff
+  checks passed without build warnings or errors.
+- An additional release CLI fixture rejected raw NUL/newline URLs and accepted
+  literal percent-encoded data. Read-only JSON status queries remained valid:
+  Guard allowed/running; Gate ready/running/fresh.
+- Re-reviewed both fixes and connected callers after testing. No additional
+  actionable finding was identified in this follow-up review.
+- Original untracked package-lock.json SHA-256 remained
+  `c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719`.
+
+Not performed: installed service/menu replacement, Surge termination/restart,
+live packet-recorder stop/upgrade, live PF changes, shutdown/reboot or Sparkle
+updates. Only disposable test children were signalled. Changes remain uncommitted
+and undeployed; source review and fixtures do not establish a live protection pass.
+
+## 2026-10-20 — independent re-review of the follow-up working tree
+
+Rechecked daemon readiness/route invalidation, Gate checkpoint and request flows,
+management/recovery callers, bounded commands, recorder process and pipe handling,
+state readers/writers, menu output and the preceding fixes on 2818dec.
+
+Corrected one additional P2 issue: Gate ignored extra arguments on several
+commands and did not handle command-level help. For example, `stop --help` would
+dispatch stop and `install --help` would dispatch installation. A pure command
+parser now validates all Gate commands before management locking/dispatch and
+maps help to display-only behavior. Existing flags, shutdown actions and exact
+UUID/confirmation requirements are preserved; extra/duplicate flags are errors.
+
+Performed:
+
+- Full `./scripts/check.sh` exited zero after the fix: 59 Swift check groups,
+  one native C group and two release-Gate regression groups (62 PASS total).
+  Release warnings-as-errors compilation had no warnings or errors.
+- Pure parser tests cover every no-option action, command help, valid status/log
+  flags, shutdown/recovery options, unknown commands, duplicate/extra flags and
+  missing arguments. A temporary Foundation home with gate.lock already held
+  verifies release `run --help`, `run -h` and invalid run arguments return before
+  service locking and preserve the owner's status. No management action against
+  an installed service is invoked by these regression tests.
+- Re-reviewed parser/dispatch consistency and the final changes. No further
+  actionable finding was identified in this review.
+- Read-only release status commands still returned valid JSON: Guard allowed and
+  running; Gate ready, running and fresh. Diff checks passed. The original
+  untracked package-lock.json SHA-256 remains
+  `c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719`.
+
+Not performed: installed service/menu updates, Surge quit/restart, live PF or
+packet-recorder changes, ordered shutdown/reboot or Sparkle updates. Source and
+build changes remain uncommitted and undeployed. These checks do not certify
+live protection or prove absence of bugs under every possible runtime ordering.
+
+## 2026-10-21 — further convergence review
+
+Re-reviewed the cumulative working-tree changes on 2818dec and their callers:
+Gate command parsing, pending-launch completion/recovery, request-lock ordering,
+update acknowledgement and shutdown retry; daemon trust/route invalidation;
+remembered-address cleanup; recorder main-queue backpressure, stop/reaping and
+legacy/group identity handling; bounded commands and state/log files; recovery,
+launcher consistency checks, domain/IP parsing, menus and installation scripts.
+No additional actionable defect was identified. No source or test logic was
+changed in this pass.
+
+Performed:
+
+- Full `./scripts/check.sh` exited zero: 59 Swift check groups, one native C
+  group and two release-Gate regression groups (62 PASS total). Release
+  warnings-as-errors compilation, example/help checks and shell syntax passed.
+- Read-only release status commands returned valid JSON: Guard allowed/running;
+  Gate ready/running/fresh; recorder unknown_or_stopped, no_bypass_verified false.
+  The recorder result does not establish that residual capture processes are absent.
+- `git diff --check` passed. Original untracked package-lock.json SHA-256 remained
+  `c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719`.
+
+Not performed: installed service/menu replacement, live Surge or recorder
+stop/restart, live PF changes, ordered shutdown/reboot, Sparkle updates or real
+packet-path acceptance. The cumulative changes remain uncommitted and undeployed;
+this review/test pass is not a proof of zero bugs or live protection.
+
+## 2026-10-21 — retained capture capacity review
+
+Re-reviewed the working tree on 2818dec: daemon readiness and candidate/route
+invalidation; Gate launch recovery, request locking, update acknowledgement and
+shutdown retry; recorder backpressure and process cleanup; commands, file/lock
+ownership, recovery, dedicated launcher, egress parsing, menus and installers.
+
+Corrected one P2 issue in `audit-coverage`: after reducing a 1024/4096 MB ring to
+256 MB, retained older segments could exceed the newly configured 32 MB segment
+limit and be rejected as unsafe/oversized despite being valid history. The range
+reader now defaults to the largest supported segment limit (512,000,000 bytes
+plus 65,536 bytes of overhead), and the CLI uses that limit independently of the
+current recording capacity. Ownership/type checks and the per-file scan timeout
+are retained. The packet-audit contract now explains that larger old segments
+remain until overwritten and can temporarily exceed the reduced ring capacity.
+
+Performed:
+
+- A private valid pcap fixture exceeding 32 MB reproduced the old reduced-size
+  limit failure (`Unsafe or oversized capture`). After the fix, all 520 records
+  and their original time range were read successfully. A sparse file one byte
+  beyond the maximum supported segment bound was still rejected. Fixtures were
+  temporary; installed captures were not opened or changed.
+- Full `./scripts/check.sh` exited zero: 59 Swift groups, one native C group and
+  two release-Gate regression groups (62 PASS total). Release warnings-as-errors
+  compilation, examples/help, shell syntax and diff checks passed.
+- Re-reviewed the final reader/CLI/test/doc changes and other reader callers;
+  no further actionable finding was identified in this pass.
+- Read-only release JSON status: Guard allowed/running; Gate ready/running/fresh;
+  recorder unknown_or_stopped with no_bypass_verified false. The recorder status
+  does not establish that residual capture processes are absent.
+- Original untracked package-lock.json SHA-256 remains
+  `c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719`.
+
+Not performed: installed service/menu updates, live recorder capacity changes,
+Surge or recorder stop/restart, live PF changes, ordered shutdown/reboot, Sparkle
+updates or packet-path acceptance. Changes remain uncommitted and undeployed;
+this source/test review does not certify live protection or prove zero bugs.

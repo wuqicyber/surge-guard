@@ -33,7 +33,7 @@ enum Recovery {
             let source = destinations[name]!.0
             if name == "policy.json", !FileManager.default.fileExists(atPath: source) {
                 // Older guards have no policy file; their baseline is enhanced-only.
-                try RootFiles.write(try JSON.encode(Configuration.enhanced, pretty: true), to: directory + "/" + name)
+                try RootFiles.write(try Configuration.enhanced.encoded(), to: directory + "/" + name)
             } else { try copy(source, to: directory + "/" + name, mode: 0o600) }
         }
         let encoded = try JSON.encode(manifest, pretty: true)

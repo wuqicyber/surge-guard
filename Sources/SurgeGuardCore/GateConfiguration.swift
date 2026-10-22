@@ -96,8 +96,14 @@ public struct GateConfiguration: Codable, Equatable {
     }
 
     public static func load() throws -> GateConfiguration {
-        guard let data = try UserPaths.readPrivate(UserPaths.config, maximumBytes: 65_536),
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let data = try UserPaths.readPrivate(UserPaths.config, maximumBytes: 262_144) else {
+            throw GuardError("Missing SurgeGate configuration")
+        }
+        return try decode(data)
+    }
+
+    public static func decode(_ data: Data) throws -> GateConfiguration {
+        guard data.count <= 262_144, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["version", "startup_apps", "priority_order", "excluded_apps", "restore_session", "delay_between_apps_seconds", "quit_timeout_seconds"] else {
             throw GuardError("Invalid or unknown SurgeGate configuration fields")
         }
@@ -116,6 +122,7 @@ public struct GateConfiguration: Codable, Equatable {
 }
 
 public struct GateSession: Codable {
+    public static let maximumBytes: Int64 = 1_048_576
     public var apps: [String]
     public var pending: [String]
     public var savedAt: Date
@@ -123,15 +130,23 @@ public struct GateSession: Codable {
     public init(apps: [String], pending: [String]) { self.apps = apps; self.pending = pending; savedAt = Date() }
 
     public static func load() throws -> GateSession {
-        guard let data = try UserPaths.readPrivate(UserPaths.session, maximumBytes: 65_536) else { return GateSession(apps: [], pending: []) }
+        guard let data = try UserPaths.readPrivate(UserPaths.session, maximumBytes: maximumBytes) else { return GateSession(apps: [], pending: []) }
         return try decode(data)
     }
 
+    public func encoded() throws -> String {
+        let text = try JSON.encode(self)
+        _ = try Self.decode(Data(text.utf8))
+        return text
+    }
+
     public static func decode(_ data: Data) throws -> GateSession {
-        guard data.count <= 65_536 else { throw GuardError("Session is too large") }
+        guard data.count <= maximumBytes else { throw GuardError("Session is too large; previous checkpoint retained") }
         let result = try JSON.decode(GateSession.self, from: data)
-        guard result.apps.count <= 256, result.pending.count <= 256,
-              (result.apps + result.pending).allSatisfy(GateConfiguration.validBundleID) else { throw GuardError("Session contains invalid app IDs") }
+        guard result.apps.count <= 1024, result.pending.count <= 1024,
+              (result.apps + result.pending).allSatisfy(GateConfiguration.validBundleID) else {
+            throw GuardError("Session requires at most 1024 valid IDs per list; previous checkpoint retained")
+        }
         return result
     }
 }

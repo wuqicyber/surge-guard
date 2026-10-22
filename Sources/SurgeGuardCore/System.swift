@@ -14,6 +14,9 @@ public enum Command {
     // Own the child group and keep its leader unreaped until cleanup, so its PID cannot be reused.
     public static func run(_ executable: String, _ arguments: [String],
                            input: String? = nil, timeout: TimeInterval = 2) throws -> CommandResult {
+        guard !([executable] + arguments).contains(where: { $0.utf8.contains(0) }) else {
+            throw GuardError("Command executable and arguments must not contain NUL characters")
+        }
         guard (input?.utf8.count ?? 0) < 16_384, timeout.isFinite, timeout > 0 else {
             throw GuardError("Invalid command input or timeout")
         }

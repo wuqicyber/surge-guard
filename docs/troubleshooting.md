@@ -73,10 +73,10 @@ Never make the private directory world-readable to simplify menu access.
 - `shutting_down`: a normal OS shutdown request is being processed; wait for
   app prompts. After shutdown is accepted, snapshots pause so an empty desktop
   cannot overwrite the saved session.
-- `shutdown_aborted`: no force-kill is performed. The saved session is retained
-  and snapshots pause. Resolve the app/PF/permission error; restart SurgeGate to
-  resume normal restoration. If macOS cancels an already accepted shutdown,
-  restart SurgeGate to resume as well.
+- `shutdown_aborted` (log event; status is `error`): no force-kill is performed.
+  The saved session is retained and snapshots pause. Resolve the app/PF/permission
+  error and retry ordered shutdown, or restart SurgeGate to resume restoration.
+  After macOS cancels an accepted shutdown, the same retry/resume choices apply.
 - `migration_app_unresolved`: inspect the retained legacy file and replace the
   display name with a valid Bundle ID in the new local config. Finder/Surge are
   always excluded from ordinary recovery.

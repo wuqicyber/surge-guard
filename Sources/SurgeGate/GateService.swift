@@ -168,7 +168,7 @@ func readStatus() throws -> (status: GateStatus, running: Bool, fresh: Bool, ser
     let pid = try StatusReport.servicePID(service)
     let running = pid != nil
     do {
-        guard let data = try UserPaths.readPrivate(UserPaths.status, maximumBytes: 131_072) else {
+        guard let data = try UserPaths.readPrivate(UserPaths.status, maximumBytes: GateSession.maximumBytes) else {
             return (GateStatus(state: running ? "waiting" : "stopped", message: running ? "Initializing" : "Service is not running", pending: []), running, false, pid)
         }
         let status = try JSON.decode(GateStatus.self, from: data)
@@ -213,7 +213,7 @@ func saveSession(_ config: GateConfiguration, pending: [String], preserveSavedAp
     let existing = preserveSavedApps ? try GateSession.load().apps : []
     let excluded = Set(config.excludedApps + ["com.apple.finder", "com.nssurge.surge-mac"])
     let apps = Array(Set(try appIDs(config) + existing)).filter { !excluded.contains($0) }.sorted()
-    try UserPaths.write(try JSON.encode(GateSession(apps: apps, pending: pending)), to: UserPaths.session)
+    try UserPaths.write(try GateSession(apps: apps, pending: pending).encoded(), to: UserPaths.session)
 }
 
 let shutdownPath = GateShutdownRequest.path
@@ -261,7 +261,7 @@ func run() throws {
     let keepAlive = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in }
     defer { keepAlive.invalidate() }
     var pending = initial.targets(saved: saved.pending + saved.apps)
-    try UserPaths.write(try JSON.encode(GateSession(apps: saved.apps, pending: pending)), to: UserPaths.session)
+    try UserPaths.write(try GateSession(apps: saved.apps, pending: pending).encoded(), to: UserPaths.session)
     var lastMessage = ""
     var lastGuardState: String?
     var lastSnapshot: Double = 0

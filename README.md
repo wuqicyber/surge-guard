@@ -133,8 +133,8 @@ The selected group chain must be contiguous, acyclic and end at a recognized
 proxy type. Missing selections, unresolved group types and unknown final types
 fail closed, including when no final-node allowlist is supplied.
 
-At most eight URL checks are accepted. Unknown config fields and credentialed
-URLs are rejected. Keep secrets out of URLs, query strings and policy names:
+At most eight URL checks are accepted. Unknown config fields, credentialed URLs
+and URLs containing raw control characters are rejected. Keep secrets out of URLs, query strings and policy names:
 policy/status files are locally readable so the menu can inspect them.
 
 ## Optional persistent TCP egress
@@ -391,6 +391,8 @@ other access (normally mode `0600`).
 The user CLI exposes `update-pause` and `update-resume`. Actual recovery failures
 retry no earlier than 30 seconds; waiting for verified blocking does not consume
 that cooldown. Each repair sends one normal quit request and never force-kills.
+`surge-gate COMMAND --help` (or `-h`) only displays help. Unknown, duplicate or
+extra options are rejected before management locks or service actions.
 The LaunchAgent uses `ProcessType=Interactive`; Foundation's child process group
 keeps Surge separate from Gate's group. Reinstall the user service to load the
 plist change. A change in Surge candidates invalidates cached signature and routing results,
@@ -416,6 +418,13 @@ in ordinary restoration. Failed launches remain pending and retry. Session files
 are atomically checkpointed every 30 seconds, including pending apps; hard power
 loss can lose changes since the last durable checkpoint. App documents/windows
 are left to each app's own recovery mechanism.
+
+Each configured app list allows 256 bundle IDs (at most 255 ASCII characters
+each); `gate.json` is bounded to 256 KiB. Session lists allow 1024 IDs each so
+startup and saved lists can merge without truncation. Session and Gate status
+reads are bounded to 1 MiB. Every checkpoint is validated before replacement;
+exceeding a session limit reports an error and retains the previous checkpoint.
+Older Gate binaries with smaller limits cannot read these larger checkpoints.
 
 SurgeGate waits for fresh `allowed` daemon status, including recent PF verification.
 It never falls back to proxy-port or arbitrary-utun guesses. A normal-user service

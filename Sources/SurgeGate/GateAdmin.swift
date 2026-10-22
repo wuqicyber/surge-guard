@@ -46,7 +46,7 @@ func migrateLegacy() throws {
               let names = previous["apps"] as? [String] else { throw GuardError("Invalid legacy session; original files retained") }
         importedSession = GateSession(apps: names.compactMap(resolve), pending: [])
     }
-    if let importedSession { try UserPaths.write(try JSON.encode(importedSession), to: UserPaths.session) }
+    if let importedSession { try UserPaths.write(try importedSession.encoded(), to: UserPaths.session) }
     try UserPaths.write(try JSON.encode(config, pretty: true), to: UserPaths.config)
     event("legacy_migrated", "Imported legacy config/session; original files retained")
 }

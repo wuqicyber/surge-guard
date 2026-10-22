@@ -110,7 +110,7 @@ enum Admin {
                 try RootFiles.write(updated, to: Paths.pfConfig, mode: 0o644)
                 try RootFiles.write(plist, to: Paths.plist, mode: 0o644)
                 if !FileManager.default.fileExists(atPath: Paths.configuration) {
-                    try RootFiles.write(try JSON.encode(configuration, pretty: true), to: Paths.configuration, mode: 0o644)
+                    try RootFiles.write(try configuration.encoded(), to: Paths.configuration, mode: 0o644)
                 }
             }
             if upgrading {

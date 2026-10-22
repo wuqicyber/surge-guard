@@ -56,8 +56,7 @@ enum PacketAuditAdmin {
             var files: [PacketCaptureRange] = []
             for name in PacketAudit.fileNames where FileManager.default.fileExists(atPath: PacketAudit.directory + "/" + name) {
                 do {
-                    files.append(try PacketCaptureRange.read(PacketAudit.directory + "/" + name,
-                                                            maximumBytes: Int64(config.capacityMegabytes / 8) * 1_000_000 + 65_536))
+                    files.append(try PacketCaptureRange.read(PacketAudit.directory + "/" + name))
                 } catch { files.append(PacketCaptureRange(file: name, readError: String(describing: error))) }
             }
             var displayFiles = try JSONSerialization.jsonObject(with: Data(JSON.encode(files).utf8)) as! [[String: Any]]
@@ -120,14 +119,16 @@ enum PacketAuditAdmin {
 
     static func stop() throws {
         try PacketAudit.prepare()
-        var capturePID: Int32?
-        var captureGroups = Set<Int32>()
+        var legacyCapturePIDs = Set<Int32>()
+        var captureGroups: [Int32: [SurgeProcess]] = [:]
         func rememberCapture() {
             if (try? RootFiles.verify(PacketAudit.snapshot)) != nil,
                let data = try? Data(contentsOf: URL(fileURLWithPath: PacketAudit.snapshot)),
                let status = try? JSON.decode(PacketAuditSnapshot.self, from: data), status.bootId == SystemClock.bootID {
-                if let pid = status.capturePid, pid > 1 { capturePID = pid }
-                if let group = status.processGroup, group > 1, group == status.pid { captureGroups.insert(group) }
+                if let group = status.processGroup, group > 1, group == status.pid {
+                    captureGroups[group] = captureGroups[group] ?? []
+                    if let identity = status.supervisorIdentity, identity.pid == group { captureGroups[group, default: []].append(identity) }
+                } else if let pid = status.capturePid, pid > 1 { legacyCapturePIDs.insert(pid) }
             }
         }
         rememberCapture()
@@ -135,25 +136,16 @@ enum PacketAuditAdmin {
         if let pid = try StatusReport.servicePID(service) {
             let group = getpgid(pid)
             guard group == pid || (group == -1 && errno == ESRCH) else { throw GuardError("Unexpected capture supervisor process group") }
-            captureGroups.insert(pid)
+            captureGroups[pid] = captureGroups[pid] ?? []
+            if let identity = try SurgeProcess.read(pid: pid) { captureGroups[pid, default: []].append(identity) }
         }
         if try loaded() { try Command.checked("/bin/launchctl", ["bootout", "system/" + PacketAudit.label], timeout: 15) }
         try waitForExit()
         guard try !loaded() else { throw GuardError("Packet audit service is still loaded") }
         // A replacement supervisor may have published between our first query and bootout.
         rememberCapture()
-        for group in captureGroups { try PacketAudit.waitForProcessGroupExit(group) }
-        if captureGroups.isEmpty, let pid = capturePID {
-            let deadline = SystemClock.seconds + 20
-            while true {
-                if kill(pid, 0) != 0 {
-                    guard errno == ESRCH else { throw GuardError("Cannot confirm capture child exit") }
-                    break
-                }
-                guard SystemClock.seconds < deadline else { throw GuardError("Capture child has not exited; refusing to replace recording files") }
-                usleep(50_000)
-            }
-        }
+        // Retain all observed births; a stale snapshot must not overwrite a live replacement's identity.
+        try PacketAudit.waitForCaptureExit(groups: captureGroups, legacyPIDs: legacyCapturePIDs)
     }
 
     static func start(previousRun: String? = nil) throws {

@@ -3,6 +3,68 @@ import SurgeGuardCore
 import Darwin
 import SystemConfiguration
 
+if Array(CommandLine.arguments.dropFirst()) == ["--audit-noisy-child"] {
+    let line = Data("capture diagnostic\n".utf8)
+    while true { try FileHandle.standardError.write(contentsOf: line) }
+}
+
+if Array(CommandLine.arguments.dropFirst()) == ["--audit-main-queue-check"] {
+    let task = Process(), pipe = Pipe()
+    task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    task.arguments = ["--audit-noisy-child"]
+    task.standardInput = FileHandle.nullDevice; task.standardOutput = FileHandle.nullDevice; task.standardError = pipe
+    try task.run()
+    try pipe.fileHandleForWriting.close()
+    let child = task.processIdentifier
+    DispatchQueue.global().asyncAfter(deadline: .now() + 5) { kill(child, SIGKILL); exit(2) }
+    var consumed = 0, stopped = false
+    DispatchQueue.global().async {
+        do {
+            try PacketAudit.readDiagnostics(pipe.fileHandleForReading) { _ in
+                try DispatchQueue.main.sync {
+                    consumed += 1
+                    if consumed == 20 {
+                        // Exercise a bounded synchronous command on main while the pipe is backpressured.
+                        _ = try Command.checked("/bin/sleep", ["0.02"])
+                        if task.isRunning { kill(child, SIGTERM) }
+                        stopped = true
+                    }
+                }
+            }
+            try pipe.fileHandleForReading.close()
+            task.waitUntilExit()
+            DispatchQueue.main.async { exit(stopped && consumed >= 20 && !task.isRunning ? 0 : 1) }
+        } catch { kill(child, SIGKILL); exit(1) }
+    }
+    dispatchMain()
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--gate-lock-check" {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent("gate-lock-check-" + UUID().uuidString)
+    do {
+        defer { try? FileManager.default.removeItem(at: home) }
+        let state = home.appendingPathComponent("Library/Application Support/SurgeGuard")
+        try UserPaths.prepare(state.path)
+        let fd = try UserPaths.lock(at: state.appendingPathComponent("gate.lock").path)
+        defer { close(fd) }
+        let status = state.appendingPathComponent("gate-status.json")
+        let sentinel = "status belongs to the service holding gate.lock"
+        try AtomicFile.write(sentinel, to: status.path, mode: 0o600)
+        let result = try Command.run("/usr/bin/env", ["CFFIXED_USER_HOME=" + home.path, CommandLine.arguments[2], "run"], timeout: 5)
+        try check(result.status != 0 && result.combined.contains("release the firewall lock") &&
+                  String(contentsOf: status) == sentinel, "A failed Gate contender overwrote its owner's status")
+        print("PASS: duplicate Gate run cannot publish over the lock owner's status")
+        for flag in ["--help", "-h", "--unexpected"] {
+            let invocation = try Command.run("/usr/bin/env", ["CFFIXED_USER_HOME=" + home.path, CommandLine.arguments[2], "run", flag], timeout: 5)
+            try check(flag == "--unexpected" ? invocation.status != 0 && invocation.combined.contains("Unexpected arguments") :
+                        invocation.status == 0 && invocation.output.contains("SurgeGate —"), "Gate help/invalid arguments reached the run loop")
+            try check(try String(contentsOf: status) == sentinel, "Gate help/invalid arguments overwrote service status")
+        }
+        print("PASS: release Gate help and argument rejection precede service locking")
+        exit(0)
+    } catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
+}
+
 if Array(CommandLine.arguments.dropFirst()) == ["--packet-audit-group-check"] {
     try PacketAudit.joinParentProcessGroup()
     print(getpgrp())
@@ -28,6 +90,26 @@ func rejects(_ operation: () throws -> Void) throws {
 }
 
 do {
+    let gateActions = ["install", "setup", "run", "start", "stop", "restart", "uninstall", "edit-config", "update-pause", "update-resume"]
+    for action in gateActions {
+        try check(try GateCommand.action([action]) == action, "Valid Gate action rejected")
+        try rejects { _ = try GateCommand.action([action, "--unexpected"]) }
+        for help in ["--help", "-h"] { try check(try GateCommand.action([action, help]) == nil, "Gate help would execute a management action") }
+    }
+    let validGateArguments = [["status"], ["status", "--json"], ["logs"], ["logs", "--json", "--follow"],
+                              ["shutdown", "--action", "restart"], ["shutdown", "--action", "shutdown"],
+                              ["recover-launch", UUID().uuidString, "--confirm-settled"]]
+    for args in validGateArguments { try check(try GateCommand.action(args) == args[0], "Valid Gate options rejected") }
+    for args in [[], ["help"], ["--help"], ["-h"], ["shutdown", "--help"], ["recover-launch", "-h"]] {
+        try check(try GateCommand.action(args) == nil, "Help selected a Gate action")
+    }
+    for args in [["unknown"], ["status", "--unknown"], ["status", "--json", "--json"], ["logs", "--follow", "--follow"],
+                 ["logs", "--unknown"], ["shutdown"], ["shutdown", "--action"], ["shutdown", "--action", "halt"],
+                 ["recover-launch"], ["recover-launch", "invalid", "--confirm-settled"], ["recover-launch", UUID().uuidString]] {
+        try rejects { _ = try GateCommand.action(args) }
+    }
+    print("PASS: Gate command parsing rejects unknown/extra arguments and keeps help non-mutating")
+
     try check(SystemClock.elapsedSeconds(since: 2.2, now: 4.9) == 2, "Elapsed seconds were rounded incorrectly")
     for start in [-1e300, 1e300, Double.nan, Double.infinity, -1, 20] {
         try check(SystemClock.elapsedSeconds(since: start, now: 10) == nil, "Invalid menu timestamp could overflow or masquerade as fresh")
@@ -36,6 +118,27 @@ do {
     try rejects { _ = try Probe.addresses(query: { _ in errno = ENOMEM; return -1 }) }
     _ = try Probe.addresses()
     print("PASS: bounded timestamp conversion and explicit interface inventory failures")
+
+    let cleanup = Firewall()
+    var cleared: [String] = []
+    try cleanup.clearStates(addresses: { ["192.0.2.1", "2001:db8::1"] }) { cleared.append($0) }
+    cleared = []
+    try rejects {
+        try cleanup.clearStates(addresses: { throw GuardError("injected interface enumeration failure") }) { cleared.append($0) }
+    }
+    try check(cleared == ["192.0.2.1", "2001:db8::1"], "Enumeration failure skipped known state cleanup")
+    cleared = []
+    try rejects { try cleanup.clearStates(addresses: { ["192.0.2.2"] }) { _ in throw GuardError("injected PF failure") } }
+    try cleanup.clearStates(addresses: { ["192.0.2.3"] }) { cleared.append($0) }
+    try check(cleared == ["192.0.2.1", "192.0.2.2", "192.0.2.3", "2001:db8::1"], "A failed cleanup forgot addresses needed for retry")
+    cleared = []
+    try cleanup.clearStates(addresses: { [] }) { cleared.append($0) }
+    try check(cleared == ["192.0.2.3"], "Successful cleanup retained obsolete addresses")
+    print("PASS: failed address inventory still clears known states and failed cleanup retains retry evidence")
+
+    let auditMain = try Command.run(CommandLine.arguments[0], ["--audit-main-queue-check"], timeout: 8)
+    try check(auditMain.status == 0, "Main-queue diagnostic backpressure deadlocked with child stop/reaping")
+    print("PASS: live diagnostic flood, main-queue synchronous work, stop and background child reaping")
 
     let diagnosticURL = FileManager.default.temporaryDirectory.appendingPathComponent("audit-diagnostics-" + UUID().uuidString)
     do {
@@ -79,10 +182,51 @@ do {
     try orphanGroup.run()
     let orphanGroupID = orphanGroup.processIdentifier
     orphanGroup.waitUntilExit()
-    try rejects { try PacketAudit.waitForProcessGroupExit(orphanGroupID, timeout: 0.05) }
+    let absentLeader = SurgeProcess(pid: orphanGroupID, startedSeconds: 1, startedMicroseconds: 0)
+    try rejects { try PacketAudit.waitForProcessGroupExit(orphanGroupID, identities: [absentLeader], timeout: 0.05) }
     try PacketAudit.waitForProcessGroupExit(orphanGroupID, timeout: 3)
     try rejects { try PacketAudit.waitForProcessGroupExit(getpgrp(), timeout: 0) }
     print("PASS: bounded capture diagnostics, consumer failure and surviving child process-group drain")
+
+    var groupSnapshot = PacketAuditSnapshot(capacityMegabytes: 256)
+    let oldLeader = SurgeProcess(pid: 450, startedSeconds: 100, startedMicroseconds: 0)
+    groupSnapshot.pid = 450; groupSnapshot.processGroup = 450; groupSnapshot.supervisorIdentity = oldLeader
+    try check(try JSON.decode(PacketAuditSnapshot.self, from: Data(JSON.encode(groupSnapshot).utf8)).supervisorIdentity == oldLeader,
+              "Capture snapshot lost supervisor birth evidence")
+    groupSnapshot.supervisorIdentity = nil
+    try check(try JSON.decode(PacketAuditSnapshot.self, from: Data(JSON.encode(groupSnapshot).utf8)).supervisorIdentity == nil,
+              "Legacy capture snapshot could not be read")
+    let groupLeader = Process()
+    groupLeader.executableURL = URL(fileURLWithPath: "/bin/sleep"); groupLeader.arguments = ["5"]
+    groupLeader.standardInput = FileHandle.nullDevice; groupLeader.standardOutput = FileHandle.nullDevice; groupLeader.standardError = FileHandle.nullDevice
+    try groupLeader.run()
+    do {
+        defer { if groupLeader.isRunning { kill(groupLeader.processIdentifier, SIGKILL) }; groupLeader.waitUntilExit() }
+        guard let identity = try SurgeProcess.read(pid: groupLeader.processIdentifier) else { throw GuardError("Missing group fixture leader") }
+        let previousIdentity = SurgeProcess(pid: identity.pid, startedSeconds: identity.startedSeconds - 1,
+                                            startedMicroseconds: identity.startedMicroseconds)
+        try PacketAudit.waitForProcessGroupExit(identity.pid, identities: [previousIdentity], timeout: 0)
+        try rejects { try PacketAudit.waitForProcessGroupExit(identity.pid, identities: [identity], timeout: 0.05) }
+        try rejects { try PacketAudit.waitForProcessGroupExit(identity.pid, identities: [identity, previousIdentity], timeout: 0.05) }
+        try rejects { try PacketAudit.waitForProcessGroupExit(identity.pid, timeout: 0.05) }
+    }
+    print("PASS: capture group cleanup retains orphans but excludes proven supervisor PID reuse")
+
+    let legacyCapture = Process()
+    legacyCapture.executableURL = URL(fileURLWithPath: "/bin/sleep"); legacyCapture.arguments = ["5"]
+    legacyCapture.standardInput = FileHandle.nullDevice; legacyCapture.standardOutput = FileHandle.nullDevice; legacyCapture.standardError = FileHandle.nullDevice
+    try legacyCapture.run()
+    do {
+        defer { if legacyCapture.isRunning { kill(legacyCapture.processIdentifier, SIGKILL) }; legacyCapture.waitUntilExit() }
+        // The supervisor is gone, but an older capture child survives in a separate process group.
+        let drainedGroups: [pid_t: [SurgeProcess]] = [groupLeader.processIdentifier: []]
+        try rejects { try PacketAudit.waitForCaptureExit(groups: drainedGroups, legacyPIDs: [legacyCapture.processIdentifier], timeout: 0.05) }
+        try rejects { try PacketAudit.waitForCaptureExit(groups: [:], legacyPIDs: [legacyCapture.processIdentifier], timeout: 0.05) }
+        kill(legacyCapture.processIdentifier, SIGTERM)
+        legacyCapture.waitUntilExit()
+        try PacketAudit.waitForCaptureExit(groups: drainedGroups, legacyPIDs: [legacyCapture.processIdentifier], timeout: 0.05)
+    }
+    print("PASS: drained supervisor group does not conceal a surviving legacy capture child")
 
     let auditArguments = try PacketAudit.arguments(megabytes: 256)
     try check(auditArguments.contains("pktap,all") && auditArguments.contains("-W") && auditArguments.contains("8") &&
@@ -177,6 +321,21 @@ do {
             let size = (try FileManager.default.attributesOfItem(atPath: captureDirectory.appendingPathComponent(name).path)[.size] as! NSNumber).intValue
             try check(size <= 1_000_000 + 65_536 + 64, "Native rotation exceeded one-record overshoot")
         }
+        let retained = captureDirectory.appendingPathComponent("retained-before-capacity-reduction.pcap").path
+        var oldSegment = pcap
+        for _ in 0..<12 { oldSegment.append(pcap.dropFirst(24)) }
+        try AtomicFile.write("", to: retained, mode: 0o600)
+        try oldSegment.write(to: URL(fileURLWithPath: retained))
+        try check(oldSegment.count > 32_000_000 + 65_536, "Capacity-reduction fixture must exceed the new segment limit")
+        let retainedRange = try PacketCaptureRange.read(retained, owner: getuid())
+        try check(retainedRange.packets == 520 && retainedRange.readError == nil &&
+                  retainedRange.earliest == range.earliest && retainedRange.latest == range.latest,
+                  "Reducing ring capacity made valid retained history unreadable")
+        let retainedFD = open(retained, O_WRONLY | O_CLOEXEC)
+        guard retainedFD >= 0 else { throw GuardError("Cannot open oversized capture fixture") }
+        defer { close(retainedFD) }
+        try check(ftruncate(retainedFD, 512_000_000 + 65_536 + 1) == 0, "Cannot create oversized sparse capture")
+        try rejects { _ = try PacketCaptureRange.read(retained, owner: getuid()) }
         var ng = Data()
         for value: UInt32 in [0x0a0d0d0a, 28, 0x1a2b3c4d] { le(value, &ng) }
         le(UInt16(1), &ng); le(UInt16(0), &ng); le(UInt64.max, &ng); le(UInt32(28), &ng)
@@ -203,7 +362,7 @@ do {
         try check(mkfifo(fifo, 0o600) == 0, "Could not create unsafe-file fixture")
         try rejects { _ = try PacketCaptureRange.read(fifo, owner: getuid(), maximumBytes: 4096) }
     }
-    print("PASS: actual pcap/pcap-ng timestamp ranges, native bounded rotation, truncated captures and unsafe files")
+    print("PASS: actual pcap/pcap-ng ranges, retained history after capacity reduction, bounded rotation and unsafe files")
 
     let auditRow: [String: Any] = ["id": 7, "startDate": 100.0, "pid": 400, "remoteHost": "example.com:443",
                                   "policyName": "DIRECT", "outBytes": 10, "completed": false,
@@ -958,6 +1117,41 @@ do {
     try rejects { _ = try GateSession.decode(Data("{}".utf8)) }
     try rejects { _ = try GateSession.decode(Data("{\"apps\":[\"Terminal\"],\"pending\":[],\"saved_at\":0}".utf8)) }
     print("PASS: session round trip preserves pending apps; corrupt session is rejected")
+
+    let longIDs = (0..<1024).map { "com.example." + String(repeating: "a", count: 238) + String(format: "%04d", $0) }
+    var fullGate = GateConfiguration.standard
+    fullGate.startupApps = Array(longIDs.prefix(256))
+    fullGate.priorityOrder = Array(longIDs[256..<512])
+    fullGate.excludedApps = Array(longIDs[768..<1024])
+    try fullGate.validate()
+    try check(try GateConfiguration.decode(Data(JSON.encode(fullGate, pretty: true).utf8)) == fullGate,
+              "Valid maximum-length Gate lists could not be read back")
+    let merged = fullGate.targets(saved: Array(longIDs[256..<768]))
+    let largeSession = GateSession(apps: Array(longIDs[256..<512]), pending: merged)
+    let largeData = Data(try largeSession.encoded().utf8)
+    try check(merged.count == 768 && largeData.count > 65_536 && GateSession.decode(largeData).pending == merged,
+              "Merged valid lists poisoned the next Gate startup")
+    let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("gate-session-limit-" + UUID().uuidString)
+    do {
+        defer { try? FileManager.default.removeItem(at: sessionFile) }
+        try AtomicFile.write(try checkpoint.encoded(), to: sessionFile.path, mode: 0o600)
+        try rejects { try AtomicFile.write(try GateSession(apps: [], pending: longIDs + ["com.example.overflow"]).encoded(), to: sessionFile.path, mode: 0o600) }
+        try check(try GateSession.decode(Data(contentsOf: sessionFile)).pending == checkpoint.pending,
+                  "Rejected session overwrote the previous checkpoint")
+    }
+    let largePolicy = Configuration(version: 1, mode: "routes", routeChecks: [
+        RouteCheck(url: "https://example.com", requiredGroup: "Proxy", allowedFinalPolicies: (0..<128).map {
+            String(repeating: "x", count: 502) + String(format: "%03d", $0)
+        })
+    ])
+    try check(try JSON.encode(largePolicy).utf8.count <= 65_536 && JSON.encode(largePolicy, pretty: true).utf8.count > 65_536,
+              "Policy size regression fixture missed the formatting boundary")
+    try check(try Configuration.decode(Data(largePolicy.encoded().utf8)) == largePolicy,
+              "Policy publication grew beyond its own reader's limit")
+    var oversizedPolicy = largePolicy
+    oversizedPolicy.routeChecks[0].allowedFinalPolicies = (0..<128).map { String(repeating: "x", count: 509) + String(format: "%03d", $0) }
+    try rejects { _ = try oversizedPolicy.encoded() }
+    print("PASS: bounded policy/config/session publication round trips and oversized checkpoints retain prior data")
     let logRecord: [String: Any] = ["time": "2026-01-01T00:00:00Z", "level": "warning", "event": "gate_changed", "pid": 123,
                                     "message": "route_policy_mismatch", "details": ["pf": "blocked", "routes": [["url": "https://example.com", "ready": false, "expected_group": "Residential", "actual_group": "Other", "final_policy": "Node C"]]]]
     let logLine = String(decoding: try JSONSerialization.data(withJSONObject: logRecord), as: UTF8.self)
@@ -1107,6 +1301,19 @@ do {
     try rejects { _ = try Command.checked("/usr/bin/false", []) }
     let literal = try Command.run("/usr/bin/printf", ["%s", "literal $(not-a-command)"])
     try check(literal.output == "literal $(not-a-command)", "Unexpected shell evaluation")
+    try rejects { _ = try Command.run("/usr/bin/true\u{0}/unexpected", []) }
+    try rejects { _ = try Command.run("/usr/bin/printf", ["%s", "https://example.com/\u{0}other"]) }
+    let binaryInput = "prefix\u{0}suffix"
+    try check(try Command.checked("/bin/cat", [], input: binaryInput) == binaryInput, "NUL in pipe data must remain supported")
+    for control in ["\u{0}", "\t", "\n", "\r", "\u{7f}"] {
+        let malformed = Configuration(version: 1, mode: "routes", routeChecks: [
+            RouteCheck(url: "https://example.com/" + control + "other", requiredGroup: "Proxy")
+        ])
+        try rejects { _ = try Configuration.decode(Data(JSON.encode(malformed).utf8)) }
+    }
+    try Configuration(version: 1, mode: "routes", routeChecks: [
+        RouteCheck(url: "https://example.com/%00other", requiredGroup: "Proxy")
+    ]).validate()
     // Constant test command only: exercise real stderr/stdout separation.
     let streams = try Command.run("/bin/sh", ["-c", "printf 'rules'; printf 'ALTQ warning' >&2"])
     try check(streams.output == "rules" && streams.diagnostics == "ALTQ warning", "Diagnostics contaminated structured output")

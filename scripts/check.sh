@@ -8,6 +8,7 @@ trap 'rm -rf "$launch_test_dir"' EXIT HUP INT TERM
 /usr/bin/clang -Wall -Wextra -Werror -I Sources/SurgeLaunch Tests/SurgeLaunchTests/main.c -o "$launch_test_dir/check"
 "$launch_test_dir/check"
 swift build -c release -Xswiftc -warnings-as-errors
+.build/debug/surge-guard-tests --gate-lock-check "$project_dir/.build/release/surge-gate"
 if .build/release/surge-guard-launch --invalid; then
     printf '%s\n' 'Dedicated launcher accepted arbitrary arguments' >&2
     exit 1

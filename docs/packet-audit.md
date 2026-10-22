@@ -30,6 +30,11 @@ retained on update unless explicitly supplied. Capacities are 256, 1024 or 4096 
 The default is eight files of about 32,000,000 bytes each, plus final-record and
 pcap-ng metadata overhead. This is a rolling window, not indefinite retention.
 Old files are overwritten. Power loss can lose buffered or unfinished records.
+Reducing capacity changes newly written segments; existing larger segments remain
+until the ring overwrites them, so total retained bytes can temporarily exceed the
+new capacity. Coverage scans still accept those older segments, bounded by the
+largest supported segment (512,000,000 bytes plus 65,536 bytes of overhead) and
+the per-file scan timeout.
 
 Each packet retains **only the first 256 captured bytes**, with available PKTAP
 metadata. Those bytes can include payload after the headers. Captures, request
@@ -59,6 +64,12 @@ launchd can reap it after a supervisor crash. Forced cleanup affects its own
 capture child only. The supervisor publishes its own process-group ID before
 starting the child; stop waits for that group even if the child PID was never
 published. A replacement supervisor is checked again after lock release.
+New snapshots also record the supervisor's native birth time. Stop rechecks it
+while waiting so a reused PID does not make an unrelated process group appear
+to be an old recorder. A missing leader still requires waiting for surviving
+group members; legacy snapshots without birth evidence retain conservative waiting.
+Older snapshots with only a capture PID are also checked independently, even when
+the supervisor group has drained; older children may belong to a separate group.
 Diagnostic lines are bounded and consumed with backpressure. The PF daemon is
 independent and is never force-restarted.
 
