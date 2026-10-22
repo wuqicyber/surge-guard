@@ -355,7 +355,6 @@ func run() throws {
                 }
             } else {
                 pending.removeAll { config.excludedApps.contains($0) }
-                var status = StatusReport.read()
                 var identity = surgeIdentity()
                 var waitingForIdentity = false
                 let needsSurge = identity.pid == nil || identity.reason == "surge_egress_identity_mismatch"
@@ -374,12 +373,13 @@ func run() throws {
                         surgeRetry.failed(String(describing: error), at: SystemClock.seconds)
                         event("surge_recovery_failed", "\(error). Retrying no earlier than 30 seconds")
                     }
-                    status = StatusReport.read()
                     identity = surgeIdentity()
                 }
                 // A pause arriving during a bounded operation is acknowledged only after that operation settles.
                 if try GateUpdate.load()?.paused == true || GatePendingLaunch.load() != nil { continue }
-                if status.state == "allowed", let target = pending.first, SystemClock.seconds >= nextLaunch {
+                // Identity checks can outlive a status snapshot; read authorization immediately before restoring apps.
+                var status = StatusReport.read()
+                if status.state == "allowed", status.firewallVerified, let target = pending.first, SystemClock.seconds >= nextLaunch {
                     switch Result(catching: { try launch(target) }) {
                     case .success(let requestedLaunch):
                         pending.removeFirst()
@@ -394,6 +394,7 @@ func run() throws {
                         pending.append(pending.removeFirst())
                         nextLaunch = SystemClock.seconds + 30
                     }
+                    status = StatusReport.read()
                 }
                 let state = surgeRetry.failure != nil ? "recovery_failed" : waitingForIdentity ? "waiting_identity" :
                     status.state == "unknown" ? "unknown" : status.state == "allowed" ? (pending.isEmpty ? "ready" : "restoring") : "waiting"

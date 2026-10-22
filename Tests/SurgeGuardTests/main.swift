@@ -1399,6 +1399,18 @@ do {
               "Old process snapshot described a running replacement daemon as stopped/allowed")
     mismatchedSnapshot.pid = 123
     try check(try StatusReport.evaluate(service: mockService, snapshot: mismatchedSnapshot).state == "allowed", "Current fresh daemon rejected")
+    let retainedStatus = try StatusReport.evaluate(service: mockService, snapshot: mismatchedSnapshot)
+    for expireAudit in [false, true] {
+        var expired = retainedStatus
+        if expireAudit { expired.snapshot!.firewallVerifiedUptime = SystemClock.seconds - 9 }
+        else { expired.snapshot!.checkedUptime = SystemClock.seconds - 9 }
+        try check(expired.state == "allowed" && !expired.firewallVerified,
+                  "A retained allowed state hid expiration during an application identity/launch operation")
+        try check(try StatusReport.evaluate(service: mockService, snapshot: expired.snapshot!).state == "unknown",
+                  "Expired launch authorization was not rejected on revalidation")
+    }
+    try check(retainedStatus.firewallVerified, "Expiry checks changed a separate fresh status value")
+    print("PASS: retained allowed reports recheck both status and PF-audit freshness at use")
     try check(try StatusReport.evaluate(service: absentService, snapshot: mismatchedSnapshot).state == "stopped", "Absent daemon reported as running")
     try check(PacketAuditMenu(service: mockService, snapshot: nil).canStop &&
               PacketAuditMenu(service: nil, snapshot: nil).canStop &&

@@ -1552,3 +1552,41 @@ Not performed: installed service/menu replacement, live stop/uninstall/reinstall
 Surge or recorder restarts, ordered shutdown/reboot, Sparkle updates, live PF
 changes or packet-path acceptance. Fixes have not been deployed; source review
 and these checks do not prove zero bugs or live protection.
+
+## 2026-10-21 — post-4476608 Gate authorization freshness review
+
+Reviewed the previous shutdown cancellation and audit freshness changes, Gate
+launch/pause/shutdown lock ordering, daemon trust and route invalidation, recorder
+pipe/child lifetimes, state and log files, egress parsing, launcher validation,
+recovery, CLI and menu/install paths.
+
+Fixed one P2 finding: Gate read an allowed Guard report before potentially slow
+Surge signature/identity checks, then restored applications using the retained
+state string without checking whether its status or PF audit had expired. Gate
+now reads the report after those checks and pause/launch-fence checks, and requires
+firewallVerified at application restoration. It reads Guard status again after
+the launch attempt before publishing Gate readiness. This changes application
+admission/reporting; it does not change PF enforcement.
+
+Performed:
+
+- Added deterministic checks that expire the status and PF-audit timestamps
+  independently in a retained allowed report. The state string alone remains
+  allowed, while firewallVerified rejects it and revalidation returns unknown.
+  These are status-predicate checks, not an NSWorkspace timing integration test.
+- Final ./scripts/check.sh exited zero: 61 Swift groups, one native C group and
+  two release-Gate groups (64 PASS total). Release warnings-as-errors compilation,
+  examples/help, shell syntax and diff checks passed without build diagnostics.
+- Re-reviewed the changed call order, launch success/failure branches, pending
+  launch fencing, pause acknowledgement and retry behavior. No additional
+  actionable finding was confirmed in this pass.
+- Read-only release JSON status commands succeeded: Guard allowed/running;
+  Gate ready/running/fresh; recorder unknown_or_stopped with no_bypass_verified
+  false. Recorder status does not verify residual-process absence.
+- The original untracked package-lock.json remains untouched, SHA-256
+  c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719.
+
+Not performed: injected delays in live signature/application launch operations,
+service/menu deployment, Surge or recorder restarts, ordered shutdown/reboot,
+Sparkle updates, live PF changes or packet-path acceptance. The fix is not
+deployed; these source and isolated checks do not certify live protection.
