@@ -131,7 +131,7 @@ func stopService() throws {
     guard !(try StatusReport.serviceLoaded(Command.run("/bin/launchctl", ["print", service]))) else {
         throw GuardError("SurgeGate is still loaded; stop is not confirmed")
     }
-    try? FileManager.default.removeItem(atPath: shutdownPath)
+    try GateShutdownRequest.cancel()
     try publish("stopped", "Stopped by user; current network and PF rules are unchanged",
                 pending: (try? GateSession.load().pending) ?? [], surge: surgeIdentity(), update: try? GateUpdate.load())
     event("gate_stopped", "User stopped SurgeGate service; current network and PF rules unchanged")
@@ -202,6 +202,7 @@ func uninstallService() throws {
     let fd = try lock("gate.lock", timeout: 10)
     defer { close(fd) }
     guard !(try StatusReport.serviceLoaded(Command.run("/bin/launchctl", ["print", service]))) else { throw GuardError("SurgeGate is still loaded") }
+    try GateShutdownRequest.cancel()
     for path in [UserPaths.plist, UserPaths.binary] where FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
     print("User service removed; configuration/session/logs retained. System guard is separate.")
 }

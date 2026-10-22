@@ -407,6 +407,8 @@ sudo /Library/PrivilegedHelperTools/surge-guard uninstall
 
 再移除独立 SwiftBar 插件或组合菜单中的调用。卸载保留配置、会话、日志与原始 PF 备份，
 只删除自己的 PF 配置段，不覆盖其他服务的配置。
+Gate 的 `stop` 和 `uninstall` 会取消尚未消费的有序关机请求，避免之后启动或重装时重放；
+取消失败会报错。已经提交给 macOS 的电源请求无法通过这项清理撤回。
 
 此项目与 Surge 官方无关联，MIT 许可证。
 

@@ -1487,6 +1487,29 @@ do {
     try check(try request.withdraw(at: requestPath) && GateShutdownRequest.load(from: requestPath) == nil,
               "Failed bootstrap left a shutdown request queued for later execution")
     try check(!(try request.withdraw(at: requestPath)), "Consumed shutdown was reported as withdrawn")
+    try AtomicFile.write(JSON.encode(request), to: requestPath, mode: 0o600)
+    try GateShutdownRequest.cancel(at: requestPath)
+    try check(try GateShutdownRequest.load(from: requestPath) == nil, "Stopped/uninstalled Gate could replay a queued shutdown on reinstall")
+    try GateShutdownRequest.cancel(at: requestPath)
+    try AtomicFile.write("malformed request", to: requestPath, mode: 0o600)
+    try GateShutdownRequest.cancel(at: requestPath)
+    try laterLaunch.save(at: pendingPath)
+    try FileManager.default.createSymbolicLink(atPath: requestPath, withDestinationPath: pendingPath)
+    try GateShutdownRequest.cancel(at: requestPath)
+    try check(try GatePendingLaunch.load(from: pendingPath) == laterLaunch, "Shutdown cancellation followed a symlink and cleared the launch fence")
+    try laterLaunch.complete(at: pendingPath)
+    let cancelDirectory = reviewDirectory.appendingPathComponent("cancel-denied")
+    try UserPaths.prepare(cancelDirectory.path)
+    let deniedRequest = cancelDirectory.appendingPathComponent("request.json").path
+    try AtomicFile.write(JSON.encode(request), to: deniedRequest, mode: 0o600)
+    do {
+        defer { chmod(cancelDirectory.path, 0o700) }
+        try check(chmod(cancelDirectory.path, 0o500) == 0, "Cannot prepare denied-cancellation fixture")
+        try rejects { try GateShutdownRequest.cancel(at: deniedRequest) }
+        try check(try GateShutdownRequest.load(from: deniedRequest)?.id == request.id, "Failed cancellation lost its queued request")
+    }
+    try GateShutdownRequest.cancel(at: deniedRequest)
+    print("PASS: stopped/uninstalled Gate cancels queued shutdowns and reports cancellation failure without clearing launch fences")
     try rejects { try GateShutdownRequest.validate(paused: true, pendingLaunch: nil, phase: .idle) }
     try rejects { try GateShutdownRequest.validate(paused: false, pendingLaunch: nil, phase: .quitting) }
     for phase in [GateShutdownPhase.idle, .submitted, .aborted] {

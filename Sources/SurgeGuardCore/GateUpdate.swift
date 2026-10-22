@@ -144,6 +144,12 @@ public struct GateShutdownRequest: Codable {
         try FileManager.default.removeItem(atPath: path)
         return true
     }
+    // Stop/uninstall hold command.lock and the stopped service's gate.lock, excluding all request writers.
+    public static func cancel(at path: String = path) throws {
+        guard unlink(path) == 0 || errno == ENOENT else {
+            throw GuardError("Cannot cancel queued shutdown request: errno \(errno)")
+        }
+    }
     public static func load(from path: String = path) throws -> GateShutdownRequest? {
         guard let data = try UserPaths.readPrivate(path) else { return nil }
         let value = try JSON.decode(Self.self, from: data)

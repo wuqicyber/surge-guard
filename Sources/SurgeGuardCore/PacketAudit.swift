@@ -288,9 +288,9 @@ public struct PacketAuditSnapshot: Codable {
         guard (try? RootFiles.verify(Paths.publicState, directory: true)) != nil,
               (try? RootFiles.verify(PacketAudit.snapshot)) != nil,
               let data = try? Data(contentsOf: URL(fileURLWithPath: PacketAudit.snapshot)),
-              let value = try? JSON.decode(PacketAuditSnapshot.self, from: data), value.fresh(),
+              let value = try? JSON.decode(PacketAuditSnapshot.self, from: data),
               let service = query ?? (try? Command.run("/bin/launchctl", ["print", "system/" + PacketAudit.label])),
-              (try? StatusReport.serviceRunning(service, pid: value.pid)) == true else { return nil }
+              (try? StatusReport.serviceRunning(service, pid: value.pid)) == true, value.fresh() else { return nil }
         return value
     }
 }

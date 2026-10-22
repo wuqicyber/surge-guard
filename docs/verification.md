@@ -1509,3 +1509,46 @@ Not performed: installed service/menu updates, live recorder capacity changes,
 Surge or recorder stop/restart, live PF changes, ordered shutdown/reboot, Sparkle
 updates or packet-path acceptance. Changes remain uncommitted and undeployed;
 this source/test review does not certify live protection or prove zero bugs.
+
+## 2026-10-21 — post-5407b7b shutdown and status review
+
+Re-reviewed Gate pending launches, update acknowledgement, shutdown submission,
+stop/uninstall and lock ownership; daemon candidate/route invalidation and state
+cleanup; recorder backpressure, child/group shutdown, retained captures and
+freshness; command/file lifetimes, recovery, launcher checks, egress parsing and
+the menu/install entry points.
+
+Fixed two findings:
+
+- P2: Gate uninstall left an unconsumed same-boot shutdown request behind, so a
+  later reinstall/start could execute it. Stop also ignored request-removal
+  errors. Both now cancel queued requests after confirming the service is absent
+  while holding command.lock and gate.lock. Cancellation failure prevents a
+  success report or removal of the installed service files. Cancellation does
+  not remove pending-launch fences or undo power requests already sent to macOS.
+- P3: PacketAuditSnapshot.read checked freshness before its bounded launchd
+  query, permitting a snapshot to expire during the query and still be returned.
+  It now checks freshness after service/PID validation, immediately before return.
+
+Performed:
+
+- Temporary-file regressions cover queued-request cancellation, repeated
+  cancellation, malformed content, symlink removal without following its launch
+  fence target, and permission-denied cancellation retaining the request and
+  returning an error. No live Gate stop/uninstall was invoked.
+- Final ./scripts/check.sh exited zero: 60 Swift groups, one native C group and
+  two release-Gate groups (63 PASS total). Existing boot/monotonic/counter
+  freshness checks, release warnings-as-errors build, examples/help, shell
+  syntax and diff checks passed.
+- Re-reviewed the final call sites and cleanup ordering; no additional
+  actionable finding was identified in this pass.
+- Read-only release status commands returned valid JSON: Guard allowed/running;
+  Gate ready/running/fresh; recorder unknown_or_stopped with no_bypass_verified
+  false. This recorder result does not verify residual-process absence.
+- Original untracked package-lock.json SHA-256 remained
+  c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719.
+
+Not performed: installed service/menu replacement, live stop/uninstall/reinstall,
+Surge or recorder restarts, ordered shutdown/reboot, Sparkle updates, live PF
+changes or packet-path acceptance. Fixes have not been deployed; source review
+and these checks do not prove zero bugs or live protection.

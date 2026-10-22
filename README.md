@@ -651,6 +651,9 @@ sudo /Library/PrivilegedHelperTools/surge-guard uninstall
 
 Remove the installed SwiftBar plugin, or the one invocation in your combined menu.
 Configuration, sessions, logs and the original PF backup are retained for recovery.
+Gate `stop` and `uninstall` cancel unconsumed ordered shutdown requests so a later
+start/reinstall cannot replay them; cancellation failure is reported as an error.
+This does not cancel a power request already submitted to macOS.
 Only the managed PF block is removed; unrelated PF content is preserved.
 
 If the binary is unavailable, run the independently installed recovery helper
