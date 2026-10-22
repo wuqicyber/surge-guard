@@ -1,0 +1,81 @@
+AGENTS.md
+  s_932087378bf127::t_0f93763cccdd6e 61-62,87-91,123-125
+Sources/SurgeGate/GateAdmin.swift
+  s_e7ad76e3cbae90::t_03bb7a1851dd7a 49
+Sources/SurgeGate/GateService.swift
+  s_e7ad76e3cbae90::t_0c4237c5f49947 171,216,264
+Sources/SurgeGuard/Admin.swift
+  s_932087378bf127::t_2c108e67670abc 113
+Sources/SurgeGuard/CLI.swift
+  s_932087378bf127::t_7bb28befd07f8c 200,228,232
+Sources/SurgeGuard/PacketAuditAdmin.swift
+  s_23a84a583a793b::t_9e88f7e1a91641 59,122-123,128-131,139-140,147-148
+Sources/SurgeGuard/Recovery.swift
+  s_932087378bf127::t_647ed85b81b88f 36
+Sources/SurgeGuardCore/Configuration.swift
+  s_e7ad76e3cbae90::t_044afcc7b3f575 56,59,99-105
+Sources/SurgeGuardCore/Firewall.swift
+  s_b24a642ce2f948::t_c8c0f6456b4ecd 198-205,228
+Sources/SurgeGuardCore/GateConfiguration.swift
+  s_e7ad76e3cbae90::t_e95caabed46729 99-106,125,133,137-142,144,146-149
+Sources/SurgeGuardCore/PacketAudit.swift
+  s_23a84a583a793b::t_e3ab81ad944e6d 24,26,29-30,36-52,127-128,246
+Sources/SurgeGuardCore/System.swift
+  s_e7ad76e3cbae90::t_8842974fe9c9c9 17-19
+Tests/SurgeGuardTests/main.swift
+  s_23a84a583a793b::t_2967699f14959c 6-67,93-112,122-142,185-186,191-230,324-338,365,1120-1154,1304-1316
+scripts/check.sh
+  s_e7ad76e3cbae90::t_dc9cb614a73782 11
+README.md
+  s_932087378bf127::t_dc04401521e5a5 136-137,394-395,422-428
+README.zh-CN.md
+  s_932087378bf127::t_f46dda60b0d577 103-106,110-111,208
+Sources/SurgeGate/main.swift
+  s_932087378bf127::t_d15945fac8c319 28,51
+Sources/SurgeGuard/PacketAuditService.swift
+  s_932087378bf127::t_aef40662a8d509 228-229
+Sources/SurgeGuardCore/GateCommand.swift
+  s_932087378bf127::t_cefebd160d29bc 1-26
+docs/troubleshooting.md
+  s_932087378bf127::t_68e2527aa96746 76-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "5407b7be4b7175294a6ccc618a90a876b6bec4fd",
+  "prompts": {},
+  "sessions": {
+    "s_23a84a583a793b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a162aa-5a3b-7d42-bdf2-6c1ae0d732e8",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_b24a642ce2f948": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d5a-7dc0-7632-ad8d-b1a2e961f3be",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_e7ad76e3cbae90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c9dc98ea-70b9-4e00-9e31-9ba53f92dd9b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
