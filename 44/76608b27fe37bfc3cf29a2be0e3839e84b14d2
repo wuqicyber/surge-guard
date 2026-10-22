@@ -1,0 +1,37 @@
+Sources/SurgeGuardCore/PacketAudit.swift
+  s_07f90a8fb86a37::t_98b3ae7b8c9bc6 291,293
+README.md
+  s_932087378bf127::t_6ab38e5945f7dd 654-656
+README.zh-CN.md
+  s_932087378bf127::t_f3a8149dd2f191 410-411
+Sources/SurgeGate/GateAdmin.swift
+  s_932087378bf127::t_34b95b48871bc7 134,205
+Sources/SurgeGuardCore/GateUpdate.swift
+  s_932087378bf127::t_4620557dc55942 147-152
+Tests/SurgeGuardTests/main.swift
+  s_932087378bf127::t_314a691a48a58b 1490-1512
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "4476608b27fe37bfc3cf29a2be0e3839e84b14d2",
+  "prompts": {},
+  "sessions": {
+    "s_07f90a8fb86a37": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16203-bf90-7be2-ae2c-2ae85ca59de6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
