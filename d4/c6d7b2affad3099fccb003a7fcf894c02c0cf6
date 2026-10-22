@@ -1,0 +1,39 @@
+Sources/SurgeGate/GateService.swift
+  s_23a84a583a793b::t_65777667661026 380-382,397
+Tests/SurgeGuardTests/main.swift
+  s_07f90a8fb86a37::t_00629e2cdf88c6 1402-1413
+docs/verification.md
+  s_932087378bf127::t_38a23b8ef8c91e 1555-1592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "d4c6d7b2affad3099fccb003a7fcf894c02c0cf6",
+  "prompts": {},
+  "sessions": {
+    "s_07f90a8fb86a37": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16203-bf90-7be2-ae2c-2ae85ca59de6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_23a84a583a793b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a162aa-5a3b-7d42-bdf2-6c1ae0d732e8",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
