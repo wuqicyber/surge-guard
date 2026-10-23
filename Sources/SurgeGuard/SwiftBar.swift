@@ -154,7 +154,7 @@ enum SwiftBar {
                                                    ("有序关机（保存会话并安全断网）", "shutdown", "#B91C1C,#FCA5A5", "power")] {
                 lines.append("-- \(title) | bash=\(parameter(CLI.gateBinary)) param1=shutdown param2=--action param3=\(action) terminal=true refresh=true color=\(color) size=14 sfimage=\(symbol) width=16 height=16")
             }
-            lines.append("-- 说明：避免系统直接强关导致重启前后漏流；未保存文档超时会安全中止" + noteStyle)
+            lines.append("-- 说明：正常退出应用后验证阻断；未保存文档超时会中止，不保证开机早期零漏流" + noteStyle)
             if let report = gateReport, report.running, report.fresh,
                report.status.capabilities?.contains("update_pause_v1") == true {
                 lines.append("-----")

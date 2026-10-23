@@ -1590,3 +1590,35 @@ Not performed: injected delays in live signature/application launch operations,
 service/menu deployment, Surge or recorder restarts, ordered shutdown/reboot,
 Sparkle updates, live PF changes or packet-path acceptance. The fix is not
 deployed; these source and isolated checks do not certify live protection.
+
+## 2026-10-23 — post-d4c6d7b convergence review
+
+Rechecked Gate authorization freshness, launch recovery and shutdown lock order;
+recorder main-queue backpressure and child/group exit; command pipe cleanup,
+atomic state/log writes, daemon loss handling, address cleanup, dedicated-group
+reservation, egress domain parsing and recovery/menu paths. No new actionable
+functional defect was confirmed in this pass.
+
+Corrected one P3 presentation issue in the SwiftBar power-operation explanation:
+the previous wording implied prevention of leaks before and after reboot, beyond
+the documented early-boot limitation. It now describes normal app exit followed
+by block verification and explicitly excludes an early-boot zero-leak guarantee.
+No control flow or service/PF operation changed.
+
+Performed:
+
+- Final ./scripts/check.sh exited zero with 64 PASS groups: 61 Swift, one C and
+  two release-Gate checks. Release warnings-as-errors build, example validation,
+  CLI help, shell syntax and diff checks passed without build diagnostics.
+- Ran the release SwiftBar renderer read-only and checked that the corrected
+  explanation and both ordered restart/shutdown actions were present. No menu
+  action was invoked and no installed menu file was replaced.
+- Read-only JSON commands succeeded: Guard allowed/running; Gate ready/running/
+  fresh; recorder unknown_or_stopped with no_bypass_verified false. The recorder
+  result does not establish absence of residual capture processes.
+- Original untracked package-lock.json remained unchanged, SHA-256
+  c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719.
+
+Not performed: service/menu deployment, Surge or recorder restarts, live PF
+mutation, ordered shutdown/reboot, Sparkle updates or packet-path acceptance.
+This review and its tests do not prove zero bugs or live protection.
