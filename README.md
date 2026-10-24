@@ -265,12 +265,14 @@ Keep an offline recovery command as well:
 sudo /Library/PrivilegedHelperTools/surge-guard unlock
 ```
 
-On a fresh installation, apply the chosen policy before installing; omit
-`configure` to use the enhanced-only default:
+On a fresh installation, install the fixed helper and launcher first, then apply
+the chosen policy **before starting the daemon**. Persistent TCP configuration
+needs the installed launcher to prepare its dedicated group. Installation alone
+does not start a new daemon; omit `configure` to use the enhanced-only default:
 
 ```sh
-sudo .build/release/surge-guard configure policy.local.json
 sudo .build/release/surge-guard install
+sudo /Library/PrivilegedHelperTools/surge-guard configure policy.local.json
 ```
 
 On updates, install the new binary with the existing policy first, verify status,

@@ -247,11 +247,13 @@ sudo /Library/PrivilegedHelperTools/surge-guard unlock
 ```
 
 ```sh
-sudo .build/release/surge-guard configure policy.local.json
 sudo .build/release/surge-guard install
+sudo /Library/PrivilegedHelperTools/surge-guard configure policy.local.json
 ```
 
-上面是全新安装的顺序。升级已有守护时，先保留现有策略安装新程序，验证状态，再用新程序应用新策略：
+上面是全新安装的顺序：先安装固定系统程序和启动器，再配置策略，最后才启动守护。
+常驻 TCP 配置依赖已安装的启动器来准备专用组；首次 `install` 本身不会启动新守护。
+升级已有守护时，先保留现有策略安装新程序，验证状态，再用新程序应用新策略：
 
 ```sh
 sudo .build/release/surge-guard install
