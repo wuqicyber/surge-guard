@@ -1,0 +1,25 @@
+docs/verification.md
+  s_932087378bf127::t_bec9ac653c169f 1708-1724
+Sources/SurgeGuard/Admin.swift
+  s_932087378bf127::t_8dd2154f2493db 78
+Sources/SurgeGuardCore/Policy.swift
+  s_932087378bf127::t_f2c9053535146e 131-138
+Tests/SurgeGuardTests/main.swift
+  s_932087378bf127::t_f2b8ac87e560ec 1452-1463
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "61ad869d01273f11b138088082804e87ec2db73c",
+  "prompts": {},
+  "sessions": {
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
