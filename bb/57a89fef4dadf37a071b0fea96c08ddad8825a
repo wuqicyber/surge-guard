@@ -1,0 +1,21 @@
+README.md
+  s_932087378bf127::t_79dec4753c5059 268-271,275
+README.zh-CN.md
+  s_932087378bf127::t_ff1bc6c87684a2 251,254-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "bb57a89fef4dadf37a071b0fea96c08ddad8825a",
+  "prompts": {},
+  "sessions": {
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
