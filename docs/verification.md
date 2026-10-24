@@ -1722,3 +1722,50 @@ native parse-only checks for the initial configuration, preserved Apple anchor,
 missing/duplicate/edited managed blocks and invalid PF syntax. The target Mac
 also passed the new parser regression with its managed anchor file absent.
 No live firewall mutation is part of these regression checks.
+
+## 2026-10-24 — second Mac installation acceptance
+
+Deployed runtime source commit 61ad869 to an arm64 Mac on macOS 14.5 after
+building and checking it on that machine. Both machines passed 72 check groups.
+The target's Command Line Tools emitted SwiftPM XCTest SDK discovery diagnostics;
+standalone tests and release compilation still completed successfully. Target
+binaries were compared to the tested build before declaring installation complete.
+
+Performed:
+
+- Installed the signed SwiftBar 2.1.1 application and independent recovery menu
+  before privileged operations. The menu uses a circle title, size 12, a 30-second
+  interval and an explicit refresh action; rendered recovery entries were checked.
+  No other machine's startup app list, credentials or profile was copied.
+- Obtained administrator authorization in the logged-in GUI session after SSH
+  could not provide authorization interaction. Installed the fixed helper/launcher,
+  configured persistent TCP plus private LAN access and the existing group-only
+  route requirement, started Guard, then installed the normal-user Gate.
+- Guard and Gate published fresh allowed/ready status. All six native readiness
+  conditions and the configured rule decision passed. Native launcher validation
+  returned the console UID and dedicated GID; mode 2755 and normal-user ownership
+  of Surge.app were retained. Guard/Gate/menu/launcher hashes matched the build.
+  System and user Launchd plists have RunAtLoad and KeepAlive enabled.
+- Direct LAN SSH and a reverse private TCP exchange both succeeded after enabling
+  protection on the target. Temporary test listeners were closed. Physical-bound
+  public TCP timed out while a CONNECT through Surge to the same public endpoint
+  succeeded. These are bounded connection checks, not complete packet coverage.
+- Rule initialization/state cleanup interrupted an SSH channel; a fresh LAN
+  connection recovered. Surge CLI queries also failed temporarily during startup
+  and application replacement, keeping the gate blocked until valid results
+  returned. The configured route requirement was never weakened to pass a check.
+- During acceptance, the observed Surge version changed from 6.9.0 to 6.10.0.
+  The new exit observer captured an exit code of zero, followed by an ordinary-group
+  replacement that Gate normally quit and relaunched with its dedicated group.
+  The recorded exit status alone does not identify who initiated the replacement.
+- After that replacement, 45 consecutive status samples were allowed, with one
+  Guard run, fresh ready Gate status and an unchanged final Surge PID. The temporary
+  setup agent was removed. Gate has an empty explicit startup list and session
+  restoration enabled; it does not import a different Mac's session.
+- The originating Mac's running Surge process remained unchanged. Its original
+  untracked package-lock.json was neither modified nor committed.
+
+Not performed: desktop screenshot/visual acceptance, cold boot or login-cycle
+acceptance, sleep/wake, deliberate live interface-enumeration failures, blocked-
+state LAN fault injection or a packet-by-packet audit. Startup/state cleanup may
+interrupt LAN sessions; UDP and early boot remain outside a zero-bypass claim.
