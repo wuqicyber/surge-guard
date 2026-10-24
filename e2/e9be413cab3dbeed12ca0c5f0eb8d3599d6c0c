@@ -1,0 +1,49 @@
+AGENTS.md
+  s_932087378bf127::t_28b260f8ec1cea 103-110
+README.md
+  s_932087378bf127::t_1bb378774dc03e 155-158,214-247,729-730
+README.zh-CN.md
+  s_932087378bf127::t_2dc3d5572b64d4 67-69,75-95
+Sources/SurgeGuard/CLI.swift
+  s_932087378bf127::t_0e97801049581e 22
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_932087378bf127::t_3bd2099dedb8e4 39-40,44,57-58
+Tests/SurgeGuardTests/main.swift
+  s_932087378bf127::t_e1593cdef4856d 998-1066,1211-1221,1491-1495
+docs/acceptance.md
+  s_932087378bf127::t_b0bc2f3e45bb32 252-270
+docs/verification.md
+  s_932087378bf127::t_274e3bb9ae3d4c 1662-1707
+Sources/SurgeGuard/SwiftBar.swift
+  s_932087378bf127::t_eaa6a359709a3a 31-36
+Sources/SurgeGuard/main.swift
+  s_932087378bf127::t_fd1a2c49686b99 189-190,194,220-223,230-232,235-239,241,309-310,315-316,331-335
+Sources/SurgeGuardCore/Configuration.swift
+  s_932087378bf127::t_92684162967868 28,30,35,40,45,49,83,86
+Sources/SurgeGuardCore/Firewall.swift
+  s_932087378bf127::t_b712181e57c87c 124,139-146,229,235,259,263,276,284-292
+Sources/SurgeGuardCore/LANTCP.swift
+  s_932087378bf127::t_9be28a09f53c19 1-50
+Sources/SurgeGuardCore/LogReader.swift
+  s_932087378bf127::t_013a8ef9265943 293-295
+Sources/SurgeGuardCore/Policy.swift
+  s_932087378bf127::t_5c26ae51e18ede 69-73,80
+Sources/SurgeGuardCore/System.swift
+  s_932087378bf127::t_e8ffdde20c5470 159-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "e2e9be413cab3dbeed12ca0c5f0eb8d3599d6c0c",
+  "prompts": {},
+  "sessions": {
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
