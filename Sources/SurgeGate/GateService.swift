@@ -6,7 +6,10 @@ import SurgeGuardCore
 func event(_ code: String, _ message: String, app: String? = nil, level: String? = nil, details: [String: Any] = [:]) {
     do {
         try UserPaths.prepare()
-        let record: [String: Any] = ["time": ISO8601DateFormatter().string(from: Date()), "component": "SurgeGate", "event": code,
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let record: [String: Any] = ["time": formatter.string(from: Date()), "uptime": SystemClock.seconds,
+                                    "run_id": gateRunID.uuidString, "component": "SurgeGate", "event": code,
                                     "level": level ?? (code.contains("failed") || code.contains("error") || code.contains("aborted") ? "error" : "info"),
                                     "message": message, "app": app ?? "", "pid": getpid(), "boot_id": SystemClock.bootID, "details": details]
         let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .withoutEscapingSlashes])
@@ -35,6 +38,7 @@ func pendingLaunchState() throws -> (request: GatePendingLaunch, disposition: Ga
     if request.app == "com.nssurge.surge-mac" {
         let identity = surgeIdentity()
         appRunning = identity.pid != nil && (identity.verified || identity.reason == "dedicated_group_not_required")
+        if appRunning { recordVerifiedSurgeChild(pid: identity.pid) }
         if !appRunning, request.observer == gateRunID, let task = surgeLaunchProcess, !task.isRunning {
             return (request, .failed)
         }
@@ -75,7 +79,32 @@ func pendingLaunchState() throws -> (request: GatePendingLaunch, disposition: Ga
 }
 
 var surgeLaunchProcess: Process?
+var surgeExitObserver: GateChildExitObserver?
 enum SurgeLaunchResult { case unchanged, launched, waitingForBlock, updatePaused }
+
+func recordVerifiedSurgeChild(pid: pid_t?) {
+    guard let pid, let task = surgeLaunchProcess, task.processIdentifier == pid, task.isRunning,
+          let identity = try? SurgeProcess.read(pid: pid) else { return }
+    surgeExitObserver?.verifiedStartup(matching: identity)
+}
+
+func requestSurgeQuit(_ app: NSRunningApplication, reason: String) -> Bool {
+    var details: [String: Any] = ["quit_request_id": UUID().uuidString, "reason": reason,
+                                  "surge_pid": app.processIdentifier, "birth_time_available": false]
+    do {
+        if let identity = try SurgeProcess.read(pid: app.processIdentifier) {
+            details["birth_time_available"] = true
+            details["surge_started_seconds"] = identity.startedSeconds
+            details["surge_started_microseconds"] = identity.startedMicroseconds
+        }
+    } catch { details["identity_error"] = String(describing: error) }
+    event("surge_quit_requested", "Gate is requesting normal Surge termination", details: details)
+    let accepted = app.terminate()
+    details["accepted"] = accepted
+    event("surge_quit_result", "Normal quit request returned; process exit is not confirmed",
+          level: accepted ? "info" : "warning", details: details)
+    return accepted
+}
 
 func surgeIdentity() -> GateSurgeIdentity {
     var result = GateSurgeIdentity()
@@ -107,7 +136,7 @@ func ensureSurge(quitTimeout: Double) throws -> SurgeLaunchResult {
         }
         if try GateUpdate.load()?.paused == true { return .updatePaused }
         for app in apps {
-            guard app.terminate() else { throw GuardError("Surge declined normal quit; dedicated launch cancelled") }
+            guard requestSurgeQuit(app, reason: "identity_repair") else { throw GuardError("Surge declined normal quit; dedicated launch cancelled") }
         }
         let deadline = SystemClock.seconds + quitTimeout
         while apps.contains(where: { !$0.isTerminated }) && SystemClock.seconds < deadline {
@@ -125,15 +154,33 @@ func ensureSurge(quitTimeout: Double) throws -> SurgeLaunchResult {
     task.standardError = FileHandle.nullDevice
     var request = GatePendingLaunch(app: "com.nssurge.surge-mac", observer: gateRunID)
     try request.save()
+    let exitObserver = GateChildExitObserver(launchID: request.id)
+    exitObserver.attach(to: task) { details in
+        event("surge_child_exited", "Dedicated launcher child exited; termination sender is unknown",
+              level: "warning", details: details)
+    }
     do { try task.run() }
     catch { try request.complete(); throw error }
     surgeLaunchProcess = task
+    surgeExitObserver = exitObserver
     request.child = try SurgeProcess.read(pid: task.processIdentifier)
+    exitObserver.recordIdentity(request.child)
+    var launchDetails: [String: Any] = ["launch_id": request.id.uuidString, "child_pid": task.processIdentifier,
+                                       "birth_time_available": request.child != nil]
+    if let child = request.child {
+        launchDetails["child_started_seconds"] = child.startedSeconds
+        launchDetails["child_started_microseconds"] = child.startedMicroseconds
+    }
+    event("surge_child_started", "Dedicated launcher started; Surge startup is not yet verified", details: launchDetails)
     if request.child != nil { try request.save() }
     let deadline = SystemClock.seconds + 10
     while SystemClock.seconds < deadline {
         if let pid = try Probe.trustedSurgePID(),
-           try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group) { try request.complete(); return .launched }
+           try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group) {
+            recordVerifiedSurgeChild(pid: pid)
+            try request.complete()
+            return .launched
+        }
         guard task.isRunning else {
             try request.complete()
             throw GuardError("Dedicated Surge launcher exited with status \(task.terminationStatus)")
@@ -237,7 +284,9 @@ func shutdown(_ action: String, config: GateConfiguration, pending: [String], pr
     let remaining = apps.filter { !$0.isTerminated }.compactMap(\.bundleIdentifier)
     guard remaining.isEmpty else { throw GuardError("Quit cancelled or timed out; shutdown aborted: \(remaining.joined(separator: ", "))") }
     let surge = NSRunningApplication.runningApplications(withBundleIdentifier: "com.nssurge.surge-mac")
-    for app in surge { guard app.terminate() else { throw GuardError("Surge declined to quit; shutdown aborted") } }
+    for app in surge {
+        guard requestSurgeQuit(app, reason: "ordered_" + action) else { throw GuardError("Surge declined to quit; shutdown aborted") }
+    }
     let blockDeadline = SystemClock.seconds + config.quitTimeoutSeconds
     while SystemClock.seconds < blockDeadline {
         let status = StatusReport.read()
@@ -272,6 +321,7 @@ func run() throws {
     var shutdownPhase = GateShutdownPhase.idle
     var shutdownFailure: String?
     event("gate_started", "Waiting for fresh verified system guard status")
+    event("surge_exit_observation_scope", "Exit status is recorded only for dedicated launcher children started by this Gate run. Existing Surge processes, NSWorkspace launches and exits after Gate stops are not covered.")
     while true {
         do {
             let config = try GateConfiguration.load()

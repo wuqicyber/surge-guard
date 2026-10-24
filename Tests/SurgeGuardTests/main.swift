@@ -3,6 +3,20 @@ import SurgeGuardCore
 import Darwin
 import SystemConfiguration
 
+if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--gate-exit-fixture",
+   let status = Int32(CommandLine.arguments[3]) {
+    switch CommandLine.arguments[2] {
+    case "held":
+        _ = try FileHandle.standardInput.read(upToCount: 1)
+        exit(status)
+    case "exit": exit(status)
+    case "signal" where [SIGTERM, SIGKILL].contains(status):
+        kill(getpid(), status)
+        exit(99)
+    default: exit(98)
+    }
+}
+
 if Array(CommandLine.arguments.dropFirst()) == ["--audit-noisy-child"] {
     let line = Data("capture diagnostic\n".utf8)
     while true { try FileHandle.standardError.write(contentsOf: line) }
@@ -109,6 +123,116 @@ do {
         try rejects { _ = try GateCommand.action(args) }
     }
     print("PASS: Gate command parsing rejects unknown/extra arguments and keeps help non-mutating")
+
+    do {
+        let watchdog = DispatchWorkItem { fputs("FAIL: Gate exit observer check timed out\n", stderr); _exit(1) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 20, execute: watchdog)
+        defer { watchdog.cancel() }
+        var records: [[String: Any]] = []
+        let started = SystemClock.seconds
+        for (mode, status) in [("held", Int32(0)), ("held_wrong_birth", 0), ("exit", 0), ("exit", 9), ("signal", SIGTERM), ("signal", SIGKILL)] {
+            let task = Process(), input = Pipe()
+            defer {
+                try? input.fileHandleForReading.close()
+                try? input.fileHandleForWriting.close()
+            }
+            task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            task.arguments = ["--gate-exit-fixture", mode.hasPrefix("held") ? "held" : mode, String(status)]
+            task.standardInput = input
+            task.standardOutput = FileHandle.nullDevice; task.standardError = FileHandle.nullDevice
+            let launchID = UUID(), previousCount = records.count
+            let observer = GateChildExitObserver(launchID: launchID)
+            observer.attach(to: task) { details in
+                dispatchPrecondition(condition: .onQueue(.main))
+                records.append(details)
+            }
+            try task.run()
+            try input.fileHandleForReading.close()
+            if mode.hasPrefix("held") {
+                guard let identity = try SurgeProcess.read(pid: task.processIdentifier) else { throw GuardError("Missing held fixture identity") }
+                observer.recordIdentity(identity)
+                let verification = mode == "held" ? identity : SurgeProcess(pid: identity.pid,
+                    startedSeconds: identity.startedSeconds + 1, startedMicroseconds: identity.startedMicroseconds)
+                observer.verifiedStartup(matching: verification)
+                try input.fileHandleForWriting.write(contentsOf: Data([10]))
+            }
+            try input.fileHandleForWriting.close()
+            // Main waits synchronously, like Gate's bounded commands: callbacks must never sync back to it.
+            task.waitUntilExit()
+            let deadline = SystemClock.seconds + 5
+            while records.count == previousCount && SystemClock.seconds < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            try check(records.count == previousCount + 1, "Missing or duplicate child exit event")
+            let record = records.last!
+            try check(record["child_pid"] as? Int32 == task.processIdentifier && record["launch_id"] as? String == launchID.uuidString,
+                      "Delayed exit callback was attributed to a different launch")
+            try check(record["termination_status"] as? Int32 == status && record["termination_sender"] as? String == "unknown",
+                      "Exit status lost or termination sender invented")
+            try check(record["startup_verified"] as? Bool == (mode == "held") && record["birth_time_available"] as? Bool == mode.hasPrefix("held"),
+                      "Unobserved birth time or unverified startup was invented")
+            try check((record["child_started_seconds"] != nil) == mode.hasPrefix("held"), "Missing child identity was not explicit")
+            try check((record["exit_observed_uptime"] as? Double ?? 0) >= started, "Exit callback timestamp missing")
+            if mode == "signal" {
+                try check(record["termination_reason"] as? String == "uncaught_signal" && record["signal"] as? Int32 == status && record["exit_code"] == nil,
+                          "Signal death was reported as a normal exit code")
+            } else {
+                try check(record["termination_reason"] as? String == "exit" && record["exit_code"] as? Int32 == status && record["signal"] == nil,
+                          "Exit code 9 was confused with SIGKILL")
+            }
+            let line = String(decoding: try JSONSerialization.data(withJSONObject: ["component": "SurgeGate", "event": "surge_child_exited", "details": record]), as: UTF8.self)
+            let decoded = try JSONSerialization.jsonObject(with: Data(LogReader.format(line, json: true).utf8)) as! [String: Any]
+            let roundTrip = decoded["details"] as! [String: Any]
+            try check(roundTrip["termination_status"] as? Int == Int(status) && roundTrip["launch_id"] as? String == launchID.uuidString,
+                      "Machine log discarded exit evidence")
+            let human = LogReader.format(line)
+            try check(human.contains(mode == "signal" ? "未处理的信号" : "退出码") && human.contains("不能由本事件确认发起者或网络状态"),
+                      "Human log omitted or overstated exit evidence")
+        }
+        let previousCount = records.count
+        var launches: [(Process, UUID)] = []
+        for code in [3, 4] {
+            let task = Process(), launchID = UUID()
+            task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            task.arguments = ["--gate-exit-fixture", "exit", String(code)]
+            task.standardInput = FileHandle.nullDevice; task.standardOutput = FileHandle.nullDevice; task.standardError = FileHandle.nullDevice
+            GateChildExitObserver(launchID: launchID).attach(to: task) { records.append($0) }
+            try task.run()
+            launches.append((task, launchID))
+        }
+        for (task, _) in launches { task.waitUntilExit() }
+        let deadline = SystemClock.seconds + 5
+        while records.count < previousCount + launches.count && SystemClock.seconds < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        try check(records.count == previousCount + launches.count, "Overlapping launches lost or duplicated exit callbacks")
+        for (task, launchID) in launches {
+            try check(records.suffix(launches.count).contains { $0["launch_id"] as? String == launchID.uuidString &&
+                $0["child_pid"] as? Int32 == task.processIdentifier && $0["exit_code"] as? Int32 == task.terminationStatus },
+                      "An old exit callback was attributed to the replacement child")
+        }
+        let failed = Process()
+        failed.executableURL = URL(fileURLWithPath: "/nonexistent-gate-exit-fixture")
+        let beforeFailedSpawn = records.count
+        GateChildExitObserver(launchID: UUID()).attach(to: failed) { records.append($0) }
+        try rejects { try failed.run() }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        try check(records.count == beforeFailedSpawn, "Failed spawn invented a child exit")
+    }
+    print("PASS: Gate child exits retain identity, exit codes/signals and JSON without main-queue deadlock")
+
+    for (cause, label) in [("identity_repair", "修复专用组启动身份"), ("ordered_restart", "有序重启电脑"), ("ordered_shutdown", "有序关闭电脑")] {
+        for accepted in [true, false] {
+            let record: [String: Any] = ["event": "surge_quit_result", "details": ["reason": cause, "accepted": accepted, "surge_pid": 42]]
+            let line = String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+            let human = LogReader.format(line)
+            try check(human.contains(label) && human.contains("不能确认进程退出") && human.contains(accepted ? "请求已接受" : "请求未被接受"),
+                      "Quit acknowledgement lost the cause or claimed process exit")
+        }
+    }
+    let scopeLog = LogReader.format("{\"event\":\"surge_exit_observation_scope\"}")
+    try check(scopeLog.contains("Gate 启动前已存在") && scopeLog.contains("Gate 停止后"), "Exit observation coverage gap omitted")
+    print("PASS: Gate quit-request logs distinguish request acceptance from exit and expose coverage limits")
 
     try check(SystemClock.elapsedSeconds(since: 2.2, now: 4.9) == 2, "Elapsed seconds were rounded incorrectly")
     for start in [-1e300, 1e300, Double.nan, Double.infinity, -1, 20] {

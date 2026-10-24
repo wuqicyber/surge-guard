@@ -522,6 +522,23 @@ A status-file read failure pauses application restoration; it does not by itself
 establish an Internet outage. State files receive their final permissions before
 atomic publication, preventing a transient private-file permission window.
 
+Gate records `surge_child_started` and `surge_child_exited` for dedicated-launcher
+children it starts. Exit records retain the launch ID, child PID/native birth time
+when available, whether Gate verified that child's Surge startup, exit code or
+uncaught signal, and callback wall/monotonic time. An early launcher failure is
+not labeled a verified Surge exit; missing birth time is explicit. Gate events
+also include a run ID and millisecond timestamps. `surge_quit_requested` records
+Gate's identity-repair or ordered shutdown/restart intent before a normal quit;
+`surge_quit_result` records request acceptance, not confirmed exit.
+
+These records use the existing private rotating Gate log (`surge-gate logs --json`).
+An exit code of zero does not establish a user-requested quit, and a signal does
+not identify its sender. Callback time is not the exact exit time or a network
+protection measurement. `surge_exit_observation_scope` records the coverage limit:
+existing Surge processes, NSWorkspace launches and exits after Gate stops have
+no child exit-status coverage. Updating source/menu files alone does not enable
+this in the running service; deploy the Gate binary in a maintenance window.
+
 SwiftBar's recent/follow system-log actions use fixed privileged `tail` reads and
 an unprivileged user renderer. This also formats historical logs without running
 user-owned formatting code as root. Root log files stay private; the guard's own

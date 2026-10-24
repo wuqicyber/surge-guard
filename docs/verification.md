@@ -1622,3 +1622,40 @@ Performed:
 Not performed: service/menu deployment, Surge or recorder restarts, live PF
 mutation, ordered shutdown/reboot, Sparkle updates or packet-path acceptance.
 This review and its tests do not prove zero bugs or live protection.
+
+## 2026-10-23 — Gate child exit diagnostics
+
+Added dedicated-launcher child start/exit records, native child identity and
+launch/run correlation, normal-exit versus uncaught-signal status, and callback
+wall/monotonic timestamps. Normal Surge quit requests now record identity-repair
+or ordered-power-operation intent before the call, followed by request acceptance
+without claiming actual exit. The existing private bounded EventFile is reused.
+Callbacks use asynchronous main-queue delivery; they do not change pending launch,
+shutdown, retry, recovery or firewall decisions. Startup verification also reaches
+an observed pending child that settles after the initial launch wait expires.
+
+Performed:
+
+- Isolated child tests cover exit codes 0 and 9, self-SIGTERM/SIGKILL, native birth
+  identity, mismatched birth-time verification, early exit without identity,
+  overlapping launch callbacks and failed spawn without a fictitious exit.
+  A bounded watchdog protects the synchronous-main-wait regression. Only disposable
+  test processes receive signals; no running applications are terminated.
+- Checked readable and JSON output preserve exit evidence, keep the signal sender
+  unknown, distinguish quit acceptance from completion, and expose coverage gaps.
+- Final `./scripts/check.sh` exited zero: 63 Swift groups, one native C group and
+  two release-Gate groups (66 PASS total). Release warnings-as-errors compilation,
+  examples/help, shell syntax and whitespace checks passed.
+- Re-reviewed callback lifetime, serialized logging, child replacement, native
+  identity matching and both Surge quit call sites. Exit data does not mutate
+  Gate state or authorize networking.
+- Read-only JSON status commands succeeded: Guard allowed/running and Gate
+  ready/running/fresh. Existing Surge, Guard and Gate PIDs remained unchanged.
+  The pre-existing untracked package-lock.json was not modified.
+
+Not performed: deployment/service replacement, real Surge exit or sleep/wake
+reproduction, ordered power operations, live PF changes or packet-path acceptance.
+The running Gate has not gained these diagnostics. Coverage starts only for
+children launched by the updated Gate; pre-existing/NSWorkspace processes and
+exits after Gate stops remain outside it. Exit status cannot identify an external
+signal sender or recover evidence from a previous unobserved exit.

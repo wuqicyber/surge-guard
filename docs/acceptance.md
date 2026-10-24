@@ -228,6 +228,14 @@ neither a clean capture nor PF drop counters prove universal absence of bypass.
 Use a separate disposable session for these disruptive scenarios; the source
 regressions do not establish their live outcomes.
 
+- For a Surge child started by the updated Gate, compare a normal quit and an
+  explicitly authorized signal termination with `surge_child_exited`. Verify
+  launch ID/PID/native birth time, exit-code versus signal distinction, and the
+  startup-verification flag. Verify identity repair and ordered power operations
+  record their quit request before calling the app, with acceptance separate
+  from actual exit. Do not infer the external signal sender or PF state from
+  these records. Restarting Gate around an existing Surge must not claim child
+  exit-status coverage for that existing process.
 - Change the Surge candidate set while Guard is allowed and while already blocked.
   Verify signature and route results are invalidated, including a second candidate
   appearing during signature validation. Reopening requires new route evidence.

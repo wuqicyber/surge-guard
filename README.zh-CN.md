@@ -376,6 +376,19 @@ sudo /Library/PrivilegedHelperTools/surge-guard logs --json
 SurgeGate 区分“应用原本已运行”和“发送了启动请求”，并分别记录“状态暂不可读”和“状态已恢复”。
 一次状态文件读取失败会暂停应用恢复，不能单凭这一条认定整机断网。
 
+Gate 为本轮通过专用启动器创建的子进程记录 `surge_child_started` 和 `surge_child_exited`。
+退出记录保留启动 ID、子进程 PID、可取得的原生出生时间、是否验证过该进程的 Surge 启动身份、
+退出码或未处理信号，以及收到退出回调的墙钟／单调时间。启动器早期失败不冒充已验证的 Surge
+退出；缺失的出生时间明确标注。Gate 事件同时保留本轮运行 ID 和毫秒时间。
+`surge_quit_requested` 在正常退出调用前记录身份修复、有序关机或重启的原因；
+`surge_quit_result` 只表示请求是否接受，不能据此认定进程已经退出。
+
+这些记录沿用私有轮转日志，用 `surge-gate logs --json` 读取。退出码 0 不证明是用户主动退出，
+终止信号也不包含发送者；回调时间不是精确退出时间或网络保护耗时。
+`surge_exit_observation_scope` 提示覆盖缺口：Gate 启动前已有的 Surge、NSWorkspace 启动的进程、
+以及 Gate 停止后的退出，没有这类子进程退出状态。仅更新源码或菜单不会让运行中的服务启用此功能，
+需在维护窗口部署 Gate 新二进制。
+
 SwiftBar 的系统日志入口只用 sudo 读取固定日志文件，再交给普通用户的 `format-logs` 格式化；
 旧记录也能按新格式显示，不放宽原日志权限，也不以 root 执行用户目录中的渲染程序。
 状态文件先在临时文件上设置好最终权限，再原子替换，消除重写时短暂不可读的权限窗口。

@@ -72,6 +72,10 @@ public enum LogReader {
                       "reconciliation_failed": "守护检查失败，正在尝试阻断并重启", "fail_closed": "已验证阻断，等待守护恢复",
                       "gate_started": "应用恢复服务启动", "application_restored": "应用启动请求已完成",
                       "application_already_running": "应用已在运行，无需重新启动", "surge_launch_requested": "已请求启动 Surge",
+                      "surge_child_started": "专用 Surge 启动器子进程已创建",
+                      "surge_child_exited": "专用 Surge 子进程已退出",
+                      "surge_quit_requested": "Gate 请求 Surge 正常退出", "surge_quit_result": "Surge 退出请求返回",
+                      "surge_exit_observation_scope": "Surge 退出状态的记录范围",
                       "gate_state": "应用门禁状态变化", "gate_ready": "应用门禁已就绪",
                       "gate_restore_progress": "正在恢复应用", "gate_waiting": "等待系统门禁放行",
                       "gate_status_unavailable": "系统门禁状态暂不可读", "gate_status_recovered": "系统门禁状态读取已恢复",
@@ -140,6 +144,32 @@ public enum LogReader {
             lines.append("  结果：沿用正在运行的应用，本次没有发送启动请求")
         } else if event == "application_restored" {
             lines.append(record["component"] == nil ? "  结果：应用恢复步骤已完成（旧版事件不能区分原本已运行的应用）" : "  结果：已完成应用启动请求")
+        } else if event == "surge_child_exited" {
+            lines.append("  进程：PID \(text(details["child_pid"]))")
+            lines.append(details["startup_verified"] as? Bool == true ? "  阶段：Gate 曾验证此子进程为就绪的 Surge 启动身份" :
+                "  阶段：尚未验证此子进程的 Surge 启动身份，可能仍是启动器")
+            switch details["termination_reason"] as? String {
+            case "exit": lines.append("  退出方式：退出码 \(text(details["exit_code"]))；不能据此判定是用户退出或内部错误")
+            case "uncaught_signal": lines.append("  退出方式：未处理的信号 \(text(details["signal"]))（9=SIGKILL，15=SIGTERM）；不能据此确定发送者")
+            default: lines.append("  退出方式：未知；原始状态见 --json")
+            }
+            lines.append("  范围：观察时间是 Gate 收到回调的时间；关联 Gate 的退出请求另查日志，不能由本事件确认发起者或网络状态")
+        } else if event == "surge_quit_requested" || event == "surge_quit_result" {
+            let causes = ["identity_repair": "修复专用组启动身份", "ordered_restart": "有序重启电脑", "ordered_shutdown": "有序关闭电脑"]
+            let cause = details["reason"] as? String ?? "unknown"
+            lines.append("  原因：\(causes[cause] ?? text(cause))；目标 PID \(text(details["surge_pid"]))")
+            if event == "surge_quit_result" {
+                switch details["accepted"] as? Bool {
+                case true: lines.append("  结果：请求已接受，但尚不能确认进程退出")
+                case false: lines.append("  结果：请求未被接受，不能确认进程退出")
+                default: lines.append("  结果：未知，不能确认进程退出")
+                }
+            } else { lines.append("  操作：即将发送正常退出请求，不使用强制终止") }
+        } else if event == "surge_child_started" {
+            lines.append("  进程：PID \(text(details["child_pid"]))；已挂接退出回调，尚未验证 Surge 启动身份或联网条件")
+        } else if event == "surge_exit_observation_scope" {
+            lines.append("  范围：仅记录本轮 Gate 通过专用启动器创建的子进程退出状态")
+            lines.append("  缺口：Gate 启动前已存在的 Surge、NSWorkspace 启动及 Gate 停止后的退出，不在此范围内")
         } else if event == "readiness_loss_blocked" {
             lines.append("  原因：\(reason(message))")
             lines.append("  结果：阻断规则与旧连接状态清理已完成；后续条件检查仍在阻断下进行")
