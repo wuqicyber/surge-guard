@@ -75,7 +75,7 @@ enum Admin {
         guard source != Paths.binary else { throw GuardError("Install using the freshly built binary, not the installed copy") }
         var existing = stat()
         if lstat(Paths.binary, &existing) == 0 { try RootFiles.verify(Paths.binary) }
-        try Command.checked("/sbin/pfctl", ["-n", "-f", "-"], input: updated)
+        try Command.checked("/sbin/pfctl", ["-n", "-f", "-"], input: Policy.installationPreview(updated))
         let stagedBinary = Paths.binary + ".new." + UUID().uuidString
         try Command.checked("/usr/bin/install", ["-o", "root", "-g", "wheel", "-m", "755", source, stagedBinary])
         defer { try? FileManager.default.removeItem(atPath: stagedBinary) }

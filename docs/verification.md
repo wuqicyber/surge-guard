@@ -1705,3 +1705,20 @@ paths have source/unit coverage only. No remote protection installation, global
 PF disable/flush, arbitrary live rule patch or packet-by-packet bypass claim.
 The installed Gate also includes the preceding exit diagnostics, but the retained
 pre-existing Surge process is outside that observer's child-exit coverage.
+
+## 2026-10-24 — fresh installation anchor preflight
+
+An authorized first installation on a second Mac exposed an installer defect:
+`pfctl -n` tried to load this tool's not-yet-created anchor file from the planned
+main configuration. The preflight safely stopped before publishing a helper,
+policy, PF configuration or service; it did not quit Surge or load live PF rules.
+Preflight now parses the planned blocked anchor inline while retaining existing
+anchor loads. Installation still writes the original separate anchor reference.
+The fresh-install instructions also install the fixed launcher before enabling
+persistent TCP, which needs that launcher's dedicated group.
+
+Performed: the local full `scripts/check.sh` passed all 72 groups, including
+native parse-only checks for the initial configuration, preserved Apple anchor,
+missing/duplicate/edited managed blocks and invalid PF syntax. The target Mac
+also passed the new parser regression with its managed anchor file absent.
+No live firewall mutation is part of these regression checks.

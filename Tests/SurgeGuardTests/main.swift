@@ -1449,6 +1449,18 @@ do {
               installed.range(of: "\nanchor \"com.apple/*\"")!.lowerBound, "Wrong anchor order")
     print("PASS: PF configuration installation/removal round trip")
 
+    let installationPreview = try Policy.installationPreview(installed)
+    try check(!installationPreview.contains(Policy.anchorPath) && installationPreview.contains(Policy.blocked) &&
+              installationPreview.contains("load anchor \"com.apple\" from \"/etc/pf.anchors/com.apple\"") &&
+              installationPreview.contains("# User comment must survive"),
+              "Fresh installation preview depends on its absent file or lost existing anchors/comments")
+    try rejects { _ = try Policy.installationPreview(config) }
+    try rejects { _ = try Policy.installationPreview(installed + Policy.configBlock) }
+    try rejects { _ = try Policy.installationPreview(installed.replacingOccurrences(of: Policy.end, with: "pass all\n" + Policy.end)) }
+    _ = try Command.checked("/sbin/pfctl", ["-n", "-f", "-"], input: installationPreview)
+    try rejects { _ = try Command.checked("/sbin/pfctl", ["-n", "-f", "-"], input: installationPreview + "invalid-pf-syntax\n") }
+    print("PASS: fresh-install native PF preflight parses the new anchor inline without requiring its file")
+
     for invalid in ["", Policy.begin, Policy.end,
                     "anchor \"com.apple/*\"\nanchor \"com.apple/*\"\n",
                     "# io.github.surge-guard\nanchor \"com.apple/*\"\n"] {

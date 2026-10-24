@@ -128,6 +128,14 @@ public enum Policy {
         return first == attachment || first == attachment + " all"
     }
 
+    public static func installationPreview(_ config: String) throws -> String {
+        guard config.components(separatedBy: configBlock).count == 2 else {
+            throw GuardError("Expected one managed attachment for PF installation preflight")
+        }
+        // The new anchor file may not exist yet; parse its planned contents inline.
+        return config.replacingOccurrences(of: configBlock, with: attachment + " {\n" + blocked + "}\n")
+    }
+
     public static func defaultInterface(_ output: String) -> String? {
         output.split(separator: "\n").compactMap { line -> String? in
             let fields = line.split(whereSeparator: { $0.isWhitespace })
