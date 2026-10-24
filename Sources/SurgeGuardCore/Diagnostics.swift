@@ -36,10 +36,12 @@ public struct GuardSnapshot: Codable {
     public var session: SessionObservation?
     public var reasons: [String]
     public var enforcement = "surge_readiness_gate"
+    public var lanTcpEnabled: Bool?
+    public var lanTcpBindings: [LANTCPBinding]?
 
     public init(runId: String, firewallVerifiedUptime: Double, allowed: Bool, configurationMode: String,
                 readiness: Readiness?, session: SessionObservation?, reasons: [String],
-                enforcement: String = "surge_readiness_gate") {
+                enforcement: String = "surge_readiness_gate", lanTcpEnabled: Bool? = nil, lanTcpBindings: [LANTCPBinding]? = nil) {
         bootId = SystemClock.bootID
         self.runId = runId
         pid = getpid()
@@ -52,6 +54,8 @@ public struct GuardSnapshot: Codable {
         self.session = session
         self.reasons = reasons
         self.enforcement = enforcement
+        self.lanTcpEnabled = lanTcpEnabled
+        self.lanTcpBindings = lanTcpBindings
     }
 
     public func fresh(boot: String = SystemClock.bootID, now: Double = SystemClock.seconds) -> Bool {

@@ -100,6 +100,14 @@ Read README.md first. It is the operational contract for all three components.
   and invalidate immediately if a second `Surge` candidate process appears.
   Candidate changes also invalidate route generations while blocked; recheck
   candidates after signature validation before caching the result.
+- Optional `allow_lan_tcp` requires `persistent_tcp`; default stays off. Allow
+  only IPv4 TCP between actual private local addresses on up `enN` interfaces
+  and RFC1918 peers, in both ready and blocked states, with interface-bound state.
+  Keep public/VPN/IPv6 restrictions. Interface/policy changes clear old states;
+  invalid configuration or enumeration failure revokes the exception. Report its
+  effective scope in status/menu/logs. Upgrade running Guard and Gate before
+  writing this field; old readers reject it. Do not promise LAN survival through
+  startup, upgrades or state cleanup, or add blocked-state UDP/DNS permissions.
 - `SurgeGate` supports persistent `update-pause` / `update-resume` (`update-mode.json`)
   acknowledged by nonce + fresh status, plus `start` / `stop` / `restart`. Keep
   30s retry backoff on real launch/quit failures without penalizing post-launch

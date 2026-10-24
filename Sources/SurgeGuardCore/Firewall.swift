@@ -121,6 +121,7 @@ public struct PFBlockCounters: Codable, Equatable {
 }
 
 public final class Firewall {
+    public private(set) var lanTCPBindings: [LANTCPBinding] = []
     private var knownAddresses = Set<String>()
     private var expectedRules: String?
     private let tokenPath = Paths.runtime + "/pf-token"
@@ -134,6 +135,14 @@ public final class Firewall {
     private var nextBlockCounterSample: Double = 0
 
     public init() {}
+
+    @discardableResult
+    public func setLANTCP(_ bindings: [LANTCPBinding]) throws -> Bool {
+        _ = try LANTCP.rules(bindings: bindings)
+        guard bindings != lanTCPBindings else { return false }
+        lanTCPBindings = bindings
+        return true
+    }
 
     public func attached() throws -> Bool {
         Policy.attachedFirst(try Command.checked("/sbin/pfctl", ["-sr"]))
@@ -217,12 +226,13 @@ public final class Firewall {
         // Load fail-closed rules before slower integrity checks. If the anchor
         // was detached, ensureEnabled still rejects the transition.
         try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"],
-                            input: Policy.blocked, timeout: 5)
+                            input: Policy.blockedRules(lanTCPBindings: lanTCPBindings), timeout: 5)
         let rulesLoaded = SystemClock.seconds
         revision += 1
         try ensureEnabled()
         let actual = try readRules()
         guard actual.contains("surge-guard-block") else { throw GuardError("Block rule did not load") }
+        try verifyLANTCP(actual)
         // States precede PF rule evaluation. Terminate states involving this
         // Mac, including old interface addresses; never flush all PF state.
         try clearStates(addresses: { Set(try Probe.addresses().filter { !$0.loopback }.map(\.address)) }) { address in
@@ -246,10 +256,11 @@ public final class Firewall {
     }
 
     public func allow(group: UInt32? = nil, interface: String? = nil) throws {
+        guard group != nil || lanTCPBindings.isEmpty else { throw GuardError("LAN TCP exceptions require persistent TCP enforcement") }
         try ensureEnabled()
         if let group {
             guard let interface else { throw GuardError("Persistent TCP policy needs a verified Surge interface") }
-            let rules = try Policy.persistentTCP(group: group, interface: interface)
+            let rules = try Policy.persistentTCP(group: group, interface: interface, lanTCPBindings: lanTCPBindings)
             try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"], input: rules, timeout: 5)
         } else {
             try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"], timeout: 5)
@@ -262,11 +273,21 @@ public final class Firewall {
                   actual.contains("if-bound") else {
                 throw GuardError("Persistent TCP rules were not verified")
             }
+            try verifyLANTCP(actual)
         } else if !actual.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw GuardError("Surge Guard rules were not cleared")
         }
         expectedRules = actual
         blockID = nil
+    }
+
+    private func verifyLANTCP(_ rules: String) throws {
+        let actual = Set(rules.split(separator: "\n").map(String.init))
+        let expected = try LANTCP.rules(bindings: lanTCPBindings).split(separator: "\n").map(String.init)
+        guard expected.allSatisfy(actual.contains),
+              actual.filter({ $0.contains("label \"surge-guard-lan-") }).count == expected.count else {
+            throw GuardError("LAN TCP rules were not verified")
+        }
     }
 
     public func recordBlockedTraffic(phase: String = "periodic") {

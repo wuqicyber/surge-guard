@@ -249,3 +249,22 @@ regressions do not establish their live outcomes.
 - Interrupt dedicated-group installation before and after directory-service
   creation. Retry must retain the recorded reserved GID and refuse a collision;
   do not assign a new GID merely to bypass a failed prior installation.
+
+## Optional private LAN TCP exception
+
+After upgrading all policy readers, enable `allow_lan_tcp` while retaining the
+existing persistent/route policy. Verify fresh `lan_tcp_enabled` and exact local
+`lan_tcp_bindings`, and read back the anchor: both directions must constrain the
+current private local address, `enN` interface, RFC1918 peer and if-bound state.
+Check direct SSH to a controlled LAN device without an HTTP/SOCKS proxy; where
+available, check an inbound private connection to a temporary local service too.
+Public TCP binding must still fail while a Surge-proxied connection can succeed.
+
+Within an authorized disruptive window, make Surge unready, change physical
+network addresses, and disable the LAN option. Verify LAN-only recovery while
+unready, withdrawal of old addresses/states, and restored default restrictions
+when disabled. Malformed configuration and failed interface inventory must not
+retain the exception. Test cold boot and service updates separately: startup and
+state cleanup may still interrupt LAN connections. Do not infer these live
+results from parser/unit tests. This option neither adds UDP DNS/mDNS recovery
+nor proves that a permitted LAN peer cannot proxy onward.

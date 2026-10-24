@@ -19,7 +19,7 @@ enum CLI {
       sudo audit-coverage              Scan actual retained packet timestamps (JSON; may be partial)
       sudo audit-uninstall             Stop recorder/remove its service; retain private captures
       validate FILE                   Validate a policy without network changes
-      rules                           Preview blocked PF rules
+      rules                           Preview default blocked PF rules (no LAN exception)
       swiftbar [--section]             Render the portable SwiftBar menu
       edit-config                     Open a user-owned policy draft
       sudo configure FILE             Validate and atomically install a policy

@@ -186,10 +186,12 @@ final class Daemon {
                 invalidateSession()
                 let snapshot = GuardSnapshot(runId: runID, firewallVerifiedUptime: firewallVerified, allowed: false,
                                              configurationMode: configuration?.mode ?? "invalid", readiness: nil,
-                                             session: nil, reasons: [loss], enforcement: configuration?.enforcement ?? "surge_readiness_gate")
+                                             session: nil, reasons: [loss], enforcement: configuration?.enforcement ?? "surge_readiness_gate",
+                                             lanTcpEnabled: configuration?.allowsLANTCP, lanTcpBindings: firewall.lanTCPBindings)
                 try RootFiles.write(try JSON.encode(snapshot), to: Paths.snapshot, mode: 0o644)
                 EventLog.write("readiness_loss_blocked", level: "warning", message: loss,
                                details: ["run_id": runID, "detected_uptime": received, "pf": "blocked",
+                                         "allow_lan_tcp": configuration?.allowsLANTCP ?? false,
                                          "block_rules_loaded_uptime": timing.rulesLoadedUptime,
                                          "block_verified_uptime": timing.statesClearedUptime,
                                          "event_to_rules_loaded_ms": max(0, (timing.rulesLoadedUptime - received) * 1000),
@@ -215,18 +217,28 @@ final class Daemon {
             var config: Configuration?
             do {
                 config = try Configuration.load()
-                if configuration != config {
-                    if allowed {
+                let bindings = try config!.allowsLANTCP ? LANTCP.bindings(addresses: Probe.addresses()) : []
+                let lanChanged = try firewall.setLANTCP(bindings)
+                if configuration != config || lanChanged {
+                    if allowed || lanChanged {
                         try firewall.block()
                         allowed = false
                         firewallVerified = SystemClock.seconds
                     }
                     invalidateSession()
                     configuration = config
-                    EventLog.write("configuration_loaded", message: "Validated policy configuration", details: ["mode": config!.mode, "run_id": runID])
+                    EventLog.write("configuration_loaded", message: "Validated policy configuration and LAN TCP interfaces",
+                                   details: ["mode": config!.mode, "run_id": runID, "allow_lan_tcp": config!.allowsLANTCP,
+                                             "lan_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(bindings).utf8))])
                 }
             } catch {
+                if try firewall.setLANTCP([]) {
+                    try firewall.block()
+                    allowed = false
+                    firewallVerified = SystemClock.seconds
+                }
                 reasons.append("configuration_invalid: \(error)")
+                config = nil
                 configuration = nil
                 generation += 1
                 session = nil
@@ -294,12 +306,14 @@ final class Daemon {
             if reason != lastReason || SystemClock.seconds >= nextPublish {
                 let snapshot = GuardSnapshot(runId: runID, firewallVerifiedUptime: firewallVerified, allowed: allowed,
                                              configurationMode: config?.mode ?? "invalid", readiness: observation, session: session, reasons: reasons,
-                                             enforcement: config?.enforcement ?? "surge_readiness_gate")
+                                             enforcement: config?.enforcement ?? "surge_readiness_gate",
+                                             lanTcpEnabled: config?.allowsLANTCP, lanTcpBindings: firewall.lanTCPBindings)
                 try RootFiles.write(try JSON.encode(snapshot), to: Paths.snapshot, mode: 0o644)
                 nextPublish = SystemClock.seconds + 1
             }
             if reason != lastReason {
-                var details: [String: Any] = ["run_id": runID, "mode": config?.mode ?? "invalid", "pf": ready ? "allowed" : "blocked"]
+                var details: [String: Any] = ["run_id": runID, "mode": config?.mode ?? "invalid", "pf": ready ? "allowed" : "blocked",
+                                              "allow_lan_tcp": config?.allowsLANTCP ?? false]
                 if !ready, let detected = surgeExitDetectedAt {
                     details["surge_exit_event_uptime"] = detected
                     details["block_verified_uptime"] = firewallVerified
@@ -314,7 +328,11 @@ final class Daemon {
             if !allowed { firewall.recordBlockedTraffic() }
         } catch {
             EventLog.write("reconciliation_failed", level: "error", message: "\(error). Blocking before launchd restart", details: ["run_id": runID])
-            do { try firewall.block(); EventLog.write("fail_closed", message: "Block rules verified before restart") }
+            do {
+                try firewall.setLANTCP([])
+                try firewall.block()
+                EventLog.write("fail_closed", message: "Block rules verified before restart")
+            }
             catch { EventLog.write("pf_unverified", level: "critical", message: "Cannot verify blocking: \(error)") }
             try? FileManager.default.removeItem(atPath: Paths.snapshot)
             exit(1)

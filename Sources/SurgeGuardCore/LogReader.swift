@@ -290,6 +290,9 @@ public enum LogReader {
             lines.append(message == "allowed" ? "  状态：普通联网已放行，配置条件与 PF 检查通过" : "  状态：普通联网已阻断，条件通过后自动恢复")
             if message != "allowed" { lines.append("  原因：\(reason(message))") }
         } else if !message.isEmpty && message != "allowed" { lines.append("  说明：\(reason(message))") }
+        if details["allow_lan_tcp"] as? Bool == true {
+            lines.append("  例外：已配置的私网 TCP 仍可经匹配的 Wi-Fi／有线网卡直连")
+        }
         if let pending { lines.append("  恢复进度：剩余 \(pending) 个应用") }
         if let elapsed = details["exit_event_to_block_verified_ms"] as? Double {
             lines.append("  Surge 退出事件收到至 PF 阻断验证：\(String(format: "%.1f", elapsed)) 毫秒（不是实际退出至逐包阻断延迟）")

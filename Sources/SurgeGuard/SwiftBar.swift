@@ -28,6 +28,12 @@ enum SwiftBar {
             if snapshot.enforcement == "persistent_tcp_egress" {
                 lines.append("-- 保护范围：常驻限制覆盖 TCP；UDP 不在本模式的保护承诺内" + noteStyle)
             }
+            if snapshot.lanTcpEnabled == true {
+                let bindings = snapshot.lanTcpBindings ?? []
+                let scope = bindings.map { "\($0.interface):\($0.address)" }.joined(separator: ", ")
+                lines.append("-- 局域网 TCP 例外：\(current ? "" : "历史记录，")\(bindings.isEmpty ? "暂无匹配网卡" : clean(scope))" + noteStyle)
+                lines.append("-- 策略范围：10/8、172.16/12、192.168/16；不受 Surge 就绪条件限制" + noteStyle)
+            }
             let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
             let age = SystemClock.elapsedSeconds(since: snapshot.checkedUptime, now: SystemClock.seconds)
                 .map { $0 == 0 ? "不到 1 秒前" : "\($0) 秒前" } ?? "时间无效"

@@ -66,14 +66,18 @@ public enum Policy {
 
     """
 
-    public static func persistentTCP(group: UInt32, interface: String) throws -> String {
+    public static func blockedRules(lanTCPBindings: [LANTCPBinding] = []) throws -> String {
+        try LANTCP.rules(bindings: lanTCPBindings) + blocked
+    }
+
+    public static func persistentTCP(group: UInt32, interface: String, lanTCPBindings: [LANTCPBinding] = []) throws -> String {
         guard (60_000...60_999).contains(group), interface.hasPrefix("utun"),
               interface.count > 4, interface.count < 16,
               interface.dropFirst(4).allSatisfy({ $0.isASCII && $0.isNumber }) else {
             throw GuardError("Invalid dedicated egress group or verified Surge interface")
         }
         // Bind VIF states to that interface; they must not authorize physical egress after route changes.
-        return """
+        return try LANTCP.rules(bindings: lanTCPBindings) + """
         pass out quick on \(interface) inet proto tcp from 198.18.0.1 to any keep state (if-bound) label "surge-guard-vif"
         pass out quick on ! lo0 proto tcp all group \(group) keep state (if-bound) label "surge-guard-egress"
         block drop quick on ! lo0 proto tcp all label "surge-guard-tcp-block"

@@ -156,6 +156,13 @@ public struct InterfaceAddress {
     public let address: String
     public let up: Bool
     public let loopback: Bool
+
+    public init(name: String, address: String, up: Bool, loopback: Bool) {
+        self.name = name
+        self.address = address
+        self.up = up
+        self.loopback = loopback
+    }
 }
 
 public enum Probe {

@@ -995,6 +995,75 @@ do {
     for group: UInt32 in [0, 20, 59999, 61000, UInt32.max] {
         try rejects { _ = try Policy.persistentTCP(group: group, interface: "utun42") }
     }
+    var lanConfig = persistent
+    lanConfig.allowLANTCP = true
+    let lanJSON = try lanConfig.encoded()
+    try check(lanJSON.contains("\"allow_lan_tcp\" : true") && Configuration.decode(Data(lanJSON.utf8)) == lanConfig,
+              "LAN option failed validated serialization")
+    try check(try lanConfig.fingerprint() != persistent.fingerprint(), "LAN policy reused a route generation")
+    try check(!persistent.allowsLANTCP && !JSON.encode(persistent).contains("allow_lan_tcp"), "LAN opt-in changed existing defaults")
+    for value in ["null", "0", "1", "\"true\"", "[]", "{}"] {
+        try rejects { _ = try Configuration.decode(Data("{\"version\":1,\"mode\":\"enhanced\",\"route_checks\":[],\"persistent_tcp\":true,\"allow_lan_tcp\":\(value)}".utf8)) }
+    }
+    try rejects { try Configuration(version: 1, mode: "enhanced", routeChecks: [], allowLANTCP: true).validate() }
+    try rejects { try Configuration(version: 1, mode: "enhanced", routeChecks: [], persistentTCP: false, allowLANTCP: true).validate() }
+    try Configuration(version: 1, mode: "enhanced", routeChecks: [], allowLANTCP: false).validate()
+    print("PASS: LAN TCP opt-in is strict, persistent-only and part of policy generations")
+
+    for address in ["10.0.0.0", "10.255.255.255", "172.16.0.0", "172.31.255.255", "192.168.0.0", "192.168.255.255"] {
+        try check(LANTCP.privateIPv4(address), "Private range boundary rejected: \(address)")
+    }
+    for address in ["9.255.255.255", "11.0.0.0", "172.15.255.255", "172.32.0.0", "192.167.255.255", "192.169.0.0",
+                    "100.64.0.1", "169.254.1.2", "127.0.0.1", "224.0.0.1", "198.18.0.1", "203.0.113.1", "0.0.0.0",
+                    "fc00::1", "::ffff:192.168.1.1", "192.168.1", "192.168.1.1/24", "192.168.1.1\npass all",
+                    "192.168.1.1\0\npass all", "192.168.01.1", " 192.168.1.1"] {
+        try check(!LANTCP.privateIPv4(address), "LAN exception accepted non-private or malformed address: \(address)")
+    }
+    let lanBindings = [LANTCPBinding(interface: "en0", address: "192.168.50.2"), LANTCPBinding(interface: "en7", address: "10.2.0.3")]
+    let lanAddresses = lanBindings.map { InterfaceAddress(name: $0.interface, address: $0.address, up: true, loopback: false) }
+    var ignoredLANAddresses = [InterfaceAddress(name: "en0", address: "203.0.113.2", up: true, loopback: false),
+                              InterfaceAddress(name: "en0", address: "192.168.60.2", up: false, loopback: false),
+                              InterfaceAddress(name: "en0", address: "192.168.60.3", up: true, loopback: true)]
+    for name in ["utun9", "bridge0", "lo0", "awdl0", "en", "en１", "en0\npass all", "en0000000000000000"] {
+        ignoredLANAddresses.append(InterfaceAddress(name: name, address: "192.168.50.3", up: true, loopback: false))
+        try rejects { _ = try LANTCP.rules(bindings: [LANTCPBinding(interface: name, address: "192.168.50.3")]) }
+    }
+    try check(try LANTCP.bindings(addresses: Array(lanAddresses.reversed()) + lanAddresses + ignoredLANAddresses) == lanBindings,
+              "LAN inventory did not deduplicate/sort or included a wrong interface/address")
+    try rejects { _ = try LANTCP.rules(bindings: lanBindings + lanBindings) }
+    try rejects { _ = try LANTCP.rules(bindings: [LANTCPBinding(interface: "en0", address: "192.168.1.1\0\npass all")]) }
+    let manyLANAddresses = (1...65).map { InterfaceAddress(name: "en0", address: "10.0.0.\($0)", up: true, loopback: false) }
+    try rejects { _ = try LANTCP.bindings(addresses: manyLANAddresses) }
+    try rejects { _ = try LANTCP.rules(bindings: manyLANAddresses.map { LANTCPBinding(interface: $0.name, address: $0.address) }) }
+    print("PASS: LAN scope accepts only bounded private IPv4 on up en interfaces and rejects injection")
+
+    let lanRules = try LANTCP.rules(bindings: lanBindings)
+    let lanBlockedRules = try Policy.blockedRules(lanTCPBindings: lanBindings)
+    let lanAllowedRules = try Policy.persistentTCP(group: 60000, interface: "utun42", lanTCPBindings: lanBindings)
+    try check(lanBlockedRules == lanRules + Policy.blocked && lanAllowedRules == lanRules + tcpRules,
+              "LAN rules displaced public blocking or Surge identity restrictions")
+    try check(try Policy.blockedRules() == Policy.blocked && LANTCP.rules(bindings: []).isEmpty, "Disabled LAN policy changed defaults")
+    let lanLines = lanRules.split(separator: "\n")
+    try check(lanLines.count == 12 && lanLines.allSatisfy { $0.contains("inet proto tcp") && $0.contains("keep state (if-bound)") && !$0.contains("any") },
+              "LAN rule widened protocol, family, peer or interface state scope")
+    for binding in lanBindings {
+        for network in LANTCP.networks {
+            try check(lanRules.contains("pass in quick on \(binding.interface) inet proto tcp from \(network) to \(binding.address) flags S/SA") &&
+                      lanRules.contains("pass out quick on \(binding.interface) inet proto tcp from \(binding.address) to \(network) flags S/SA"),
+                      "LAN rules failed to constrain both the peer and actual local interface/address")
+        }
+    }
+    let lanFirewall = Firewall()
+    try check(try lanFirewall.setLANTCP(lanBindings) && !lanFirewall.setLANTCP(lanBindings), "Stable LAN inventory caused reloads")
+    try rejects { _ = try lanFirewall.setLANTCP(lanBindings + lanBindings) }
+    try check(lanFirewall.lanTCPBindings == lanBindings, "Rejected LAN inventory changed pending rules")
+    // This must fail before invoking PF; no group means the caller would clear its anchor.
+    try rejects { try lanFirewall.allow() }
+    try check(try lanFirewall.setLANTCP([lanBindings[1]]) && lanFirewall.lanTCPBindings == [lanBindings[1]] &&
+              lanFirewall.setLANTCP([]) && lanFirewall.lanTCPBindings.isEmpty && !lanFirewall.setLANTCP([]),
+              "Interface withdrawal/disabled policy failed to remove the prior LAN scope")
+    print("PASS: LAN rules preserve public blocking in both states and revoke withdrawn interfaces")
+
     var processInfo = kinfo_proc()
     processInfo.kp_eproc.e_ucred.cr_uid = 501
     processInfo.kp_eproc.e_pcred.p_ruid = 501
@@ -1139,6 +1208,17 @@ do {
     let decoded = try JSON.decode(GuardSnapshot.self, from: Data(statusData.utf8))
     try check(decoded.bootId == snapshot.bootId, "Status schema did not round trip")
     print("PASS: boot-bound monotonic status/PF freshness")
+    try check(decoded.lanTcpEnabled == nil && decoded.lanTcpBindings == nil, "Old snapshots acquired an implicit LAN exception")
+    snapshot.lanTcpEnabled = true; snapshot.lanTcpBindings = lanBindings
+    let lanSnapshotJSON = try JSON.encode(snapshot)
+    let lanSnapshot = try JSON.decode(GuardSnapshot.self, from: Data(lanSnapshotJSON.utf8))
+    try check(lanSnapshot.lanTcpEnabled == true && lanSnapshot.lanTcpBindings == lanBindings &&
+              lanSnapshotJSON.contains("\"lan_tcp_enabled\":true") && lanSnapshotJSON.contains("\"lan_tcp_bindings\":"),
+              "Effective LAN scope disappeared from snake-case status JSON")
+    let lanLog = "{\"event\":\"gate_changed\",\"message\":\"waiting\",\"details\":{\"allow_lan_tcp\":true}}"
+    try check(LogReader.format(lanLog).contains("例外：已配置的私网 TCP") && LogReader.format(lanLog, json: true).contains("allow_lan_tcp"),
+              "Blocked-state logs hid the configured LAN exception")
+    print("PASS: LAN status supports old readers and exposes effective scope without losing JSON evidence")
     let freshSnapshot = GuardSnapshot(runId: "display-test", firewallVerifiedUptime: SystemClock.seconds,
                                      allowed: true, configurationMode: "enhanced", readiness: nil, session: nil, reasons: [])
     let snapshotObject = try JSONSerialization.jsonObject(with: Data(JSON.encode(freshSnapshot).utf8))
@@ -1408,6 +1488,11 @@ do {
     print("PASS: native macOS PF parser")
     _ = try Command.checked("/sbin/pfctl", ["-n", "-a", Policy.anchor, "-f", "-"], input: tcpRules)
     print("PASS: native persistent TCP rule syntax (no live firewall mutation)")
+    for policy in [lanAllowedRules, lanBlockedRules] {
+        let parsed = try Command.checked("/sbin/pfctl", ["-n", "-v", "-a", Policy.anchor, "-f", "-"], input: policy)
+        for line in lanLines { try check(parsed.contains(line), "PF canonical output changed LAN verification: \(line)") }
+    }
+    print("PASS: native LAN TCP syntax and canonical verification in ready/blocked policies (parse-only)")
 
     var started = Date()
     do {

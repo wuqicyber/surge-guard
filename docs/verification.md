@@ -1659,3 +1659,49 @@ The running Gate has not gained these diagnostics. Coverage starts only for
 children launched by the updated Gate; pre-existing/NSWorkspace processes and
 exits after Gate stops remain outside it. Exit status cannot identify an external
 signal sender or recover evidence from a previous unobserved exit.
+
+## 2026-10-24 — explicit private LAN TCP exception
+
+Added the opt-in `allow_lan_tcp` policy flag (requires persistent TCP), dynamically
+bound RFC1918 TCP rules for up `enN` private IPv4 addresses in both allowed and
+blocked states, and effective scope in status/menu/logs. No Surge profile change
+was required. Existing policy modes, route checks and public TCP restrictions
+are retained. New fields must follow upgrades of running Guard/Gate and the menu.
+
+Performed:
+
+- Final `./scripts/check.sh` exited zero with 71 PASS groups (68 Swift, one C,
+  two release-Gate), including release warnings-as-errors, examples, CLI/help,
+  shell syntax and whitespace checks. New cases cover policy compatibility and
+  invalid types; private-range boundaries; canonical addresses and NUL/newline
+  injection; interface eligibility, duplicate/oversized inventory and withdrawal;
+  ready/blocked rules; status JSON and log scope; and native PF parse-only output.
+- Re-reviewed config changes, early loss handling, interface withdrawal, state
+  cleanup and failure paths. Invalid configuration/inventory revokes exceptions;
+  a group-less allow call rejects pending LAN rules before any PF operation.
+- Ran `./scripts/install-user.sh --menu-only` and verified independent offline
+  recovery entries. Updated Guard through its managed backup/rollback installer,
+  then Gate, then applied the preserved local policy with only LAN opt-in added.
+  Guard and Gate published fresh allowed/ready status; installed Guard/Gate/menu
+  hashes matched the checked release. Gate's initial 20-second ready wait expired
+  while it processed its existing restoration list; subsequent fresh status was
+  ready without another restart. The running Surge PID/start time was unchanged;
+  its ordinary-user ownership and launcher mode 2755 were retained.
+- Read back the own anchor: six LAN rules constrain one actual interface/address,
+  both directions and three private networks; VIF, dedicated-group and public TCP
+  block rules remain. Direct SSH to a controlled LAN Mac succeeded without a
+  proxy. A reverse TCP exchange from that Mac to a temporary private-only listener
+  also succeeded; the one-shot listener closed afterward.
+- A physical-interface-bound TCP attempt to a public endpoint timed out, while a
+  CONNECT through Surge to the same endpoint succeeded. This is a bounded socket
+  sample plus rule verification, not proof of complete packet coverage. The menu
+  renderer showed effective LAN scope and retained independent recovery actions.
+- Original untracked package-lock.json SHA-256 remained
+  c9416a0c2883dbb47c4cb674c0e3705b7142cf4d59683c25b5abb5280d6df719.
+
+Not performed: real Surge exit, blocked-state LAN acceptance, network/address
+switch, cold boot, malformed live policy or forced enumeration failure. These
+paths have source/unit coverage only. No remote protection installation, global
+PF disable/flush, arbitrary live rule patch or packet-by-packet bypass claim.
+The installed Gate also includes the preceding exit diagnostics, but the retained
+pre-existing Surge process is outside that observer's child-exit coverage.

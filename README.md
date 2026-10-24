@@ -152,9 +152,10 @@ dedicated-group allow rules bind connection state to the interface.
 UDP is outside this opt-in's enforcement scope; it is not an all-protocol kill
 switch. IPv6 application TCP has no VIF exception in this
 version; Surge-owned IPv6 egress can match the group. There are no Tailscale,
-other-VPN, LAN or ordinary-user exceptions. Failed readiness still loads the
-existing full block and clears this Mac's old states. Policy/interface changes
-also pass through that blocked transition.
+other-VPN or ordinary-user identity exceptions. LAN TCP is blocked by default;
+the explicit exception below is available. Failed readiness loads blocking rules
+and clears this Mac's old states, retaining only configured LAN TCP exceptions.
+Policy/interface changes also pass through that blocked transition.
 
 If the requirement is only traversal through Surge, including Surge's own DIRECT
 decisions, use `examples/persistent-tcp.json` (`enhanced` plus `persistent_tcp`).
@@ -209,6 +210,40 @@ Update backups include the launcher when installed. Emergency unlock removes
 this guard's rules as before. Uninstall removes the launcher but retains the
 reserved group and its private installation record to avoid reassigning an
 identity that a surviving Surge process or files may still use.
+
+## Optional private LAN TCP access
+
+To allow direct SSH, file sharing and other TCP services on common private LANs,
+add `"allow_lan_tcp": true` to the existing policy **after updating both Guard and
+Gate, including their running processes, and the menu renderer**. This requires
+`persistent_tcp: true`; omitted/false preserves the original restriction. Older
+binaries reject the new field. Preserve existing mode and route checks; apply
+with the installed `configure` command and verify fresh status afterward.
+
+The exception permits incoming and outgoing **IPv4 TCP only** between this Mac's
+current private address on an up `enN` interface (Ethernet/Wi-Fi) and peers in
+`10.0.0.0/8`, `172.16.0.0/12` or `192.168.0.0/16`. Rules bind the local address,
+interface and connection state. They do not grant VPN/bridge interfaces, IPv6,
+link-local, CGNAT or public addresses an exception. Remote private subnets may
+be reached through a LAN router; this is not limited to the directly attached
+subnet. IP forwarding by this Mac is not authorized by these rules.
+
+LAN TCP stays permitted when Surge or a configured route check is unready, so
+local administration can recover a blocked machine. Address/interface changes
+reload the rules and clear old states. Invalid configuration or failed interface
+inventory removes the exception and fails closed. Startup, updates and state
+cleanup can briefly interrupt even LAN connections; this is not an independent
+out-of-band recovery path. The exception does not add blocked-state UDP DNS or
+mDNS access, so recovery may require a literal IP address.
+
+`status --json` exposes `snapshot.lan_tcp_enabled` and effective
+`lan_tcp_bindings`; the menu shows the same scope. A blocked status now describes
+traffic outside the configured exception. A permitted LAN peer could itself
+proxy traffic onward; do not treat this option as proof that every connection
+or application goes through Surge. Public TCP restrictions and all existing
+readiness/route checks remain in force. If Surge captures a LAN destination,
+its own policy still decides that connection; adding a Surge DIRECT rule alone
+cannot override a Guard block on a directly bound physical socket.
 
 ## Install or update the system guard
 
@@ -691,7 +726,8 @@ another service's rules to recover this utility.
 ## Limits
 
 - Blocked mode permits loopback and narrow DHCP/IPv6 link configuration; normal
-  Internet/LAN traffic and DNS are blocked. This is not zero packets on the link.
+  Internet/LAN traffic and DNS are blocked, except the explicit private LAN TCP
+  option above. This is not zero packets on the link.
 - Default allowed mode clears this guard's anchor and preserves Surge policies, including
   DIRECT. It does not independently exclude physical-interface binding, alternate
   VPNs or Surge exclusions. Default-route readiness is not an unbypassable tunnel.
