@@ -1802,3 +1802,47 @@ Not performed: privileged live attachment repair, actual failed-write/load
 injection against PF, macOS update/reboot acceptance, SwiftBar login/visual
 acceptance, or deployment to another Mac. Passing these source checks does not
 establish live protection or compatibility with every installer environment.
+
+## 2026-10-25 — deployment after a macOS update
+
+Deployed runtime source commit 353f790 to the second arm64 Mac after its update
+from macOS 14.5 to 14.8.9. The pre-installation disk configuration had lost the
+managed PF attachment, Guard repeatedly failed startup, and Gate waited for
+verified blocking before correcting Surge's ordinary-group identity.
+
+Performed:
+
+- Built the archived commit on the target with its updated Command Line Tools;
+  `scripts/check.sh` passed with 76 PASS lines. Installed the independent recovery
+  menu with `install-user.sh --menu-only` before privileged changes.
+- Used the official installer after administrator authorization in the logged-in
+  GUI session. It retained the existing policy, backed up prior files and restored
+  the managed attachment. Initial verified blocking allowed Gate to normally quit
+  and relaunch Surge with the dedicated group; Guard then verified permission.
+  Installed the updated Gate after that recovery completed.
+- Read back enabled PF, the root attachment before the Apple wildcard anchor,
+  and the live LAN, VIF, dedicated-group and TCP-block rules. Disk configuration
+  contained the managed block again. No global PF disable/flush was used.
+- Guard and Gate remained allowed/ready for 45 consecutive samples, with one Guard
+  run and an unchanged Surge PID. Both services were still running on a subsequent
+  independent check. All three installed binary hashes matched the tested build;
+  launcher validation passed with dedicated GID 60000 and mode 2755, while the
+  application retained its ordinary-user owner. The policy hash was unchanged.
+- A fresh LAN SSH connection and reverse private TCP exchange succeeded. A public
+  TCP attempt bound to the physical interface timed out, while CONNECT through
+  Surge to the same endpoint succeeded. The temporary listener was closed. These
+  bounded socket tests do not establish packet-by-packet coverage.
+- Installed a user LaunchAgent that opens the existing SwiftBar application once
+  at login; its startup command exited successfully and SwiftBar remained running.
+  Rendered output showed verified permission, ready Gate status, the circle title,
+  explicit refresh and independent recovery actions. The temporary setup agent
+  was removed; deployment evidence and backups were retained privately.
+- The originating Mac's services were not redeployed and its Surge PID remained
+  unchanged. Its untracked package-lock.json was neither changed nor committed.
+
+Not performed: another macOS update, cold boot/login-cycle or visual menu
+acceptance, deliberate live write/load failure injection, or a full packet audit.
+Rule initialization interrupted an existing SSH channel before fresh LAN access
+recovered. Custom PF layouts still require manual review; this acceptance does
+not establish compatibility with every macOS installer environment or coverage
+of UDP and early-boot traffic.
