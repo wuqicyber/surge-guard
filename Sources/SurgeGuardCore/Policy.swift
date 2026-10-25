@@ -128,6 +128,32 @@ public enum Policy {
         return first == attachment || first == attachment + " all"
     }
 
+    // Only restore a known default layout; custom rules require an administrator's review.
+    public static func restoringDefaultAttachment(_ config: String, liveRules: String) throws -> String {
+        func lines(_ text: String) -> [String] {
+            text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        }
+        let base = try removingAttachment(from: config)
+        guard base.utf8.count <= 65_536, !base.contains(anchor), lines(base) == [
+            "scrub-anchor \"com.apple/*\"", "nat-anchor \"com.apple/*\"",
+            "rdr-anchor \"com.apple/*\"", "dummynet-anchor \"com.apple/*\"",
+            "anchor \"com.apple/*\"", "load anchor \"com.apple\" from \"/etc/pf.anchors/com.apple\""
+        ] else { throw GuardError("PF attachment recovery requires an unmodified Apple default rule layout") }
+        let live = lines(liveRules)
+        let apple = "anchor \"com.apple/*\" all"
+        let filters = live.first == "scrub-anchor \"com.apple/*\" all fragment reassemble" ? Array(live.dropFirst()) : live
+        guard live.isEmpty || filters == [apple] || filters == [attachment + " all", apple] else {
+            throw GuardError("PF attachment recovery refused unfamiliar live rules; review PF ordering")
+        }
+        return try attaching(to: config)
+    }
+
+    // Filter-only loading preserves NAT, options and existing Apple/third-party anchor contents.
+    public static var restoredDefaultFilters: String {
+        "scrub-anchor \"com.apple/*\"\n" + attachment + " {\n" + blocked + "}\nanchor \"com.apple/*\"\n"
+    }
+
     public static func installationPreview(_ config: String) throws -> String {
         guard config.components(separatedBy: configBlock).count == 2 else {
             throw GuardError("Expected one managed attachment for PF installation preflight")

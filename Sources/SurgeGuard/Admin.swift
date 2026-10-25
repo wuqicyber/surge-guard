@@ -199,10 +199,14 @@ enum Admin {
         try RootFiles.verify(Paths.binary)
         try RootFiles.verify(Paths.plist)
         try RootFiles.verify(Policy.anchorPath)
-        try Firewall().prepareAttachment()
-        if FileManager.default.fileExists(atPath: Paths.unlockMarker) {
-            try RootFiles.verify(Paths.unlockMarker)
-            try FileManager.default.removeItem(atPath: Paths.unlockMarker)
+        do {
+            let lock = try RuntimeLock(timeout: 20)
+            defer { withExtendedLifetime(lock) {} }
+            try Firewall().prepareAttachment()
+            if FileManager.default.fileExists(atPath: Paths.unlockMarker) {
+                try RootFiles.verify(Paths.unlockMarker)
+                try FileManager.default.removeItem(atPath: Paths.unlockMarker)
+            }
         }
         // Clear a persisted launchd disable override so subsequent boots load it.
         try Command.checked("/bin/launchctl", ["enable", "system/" + Paths.label])

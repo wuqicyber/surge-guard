@@ -149,21 +149,75 @@ public final class Firewall {
     }
 
     public func prepareAttachment() throws {
-        let live = try Command.checked("/sbin/pfctl", ["-sr"])
-        if Policy.attachedFirst(live) { return }
-        guard !live.contains(Policy.attachment) else {
-            throw GuardError("Another filter precedes Surge Guard; review PF ordering")
+        try Self.preparingAttachment({ try prepareAttachmentRules() }, blockOnFailure: { _ = try block() })
+    }
+
+    public static func preparingAttachment(_ prepare: () throws -> Void, blockOnFailure: () throws -> Void) throws {
+        do { try prepare() }
+        catch {
+            let failure = String(describing: error)
+            // An old live attachment may still allow traffic even when disk recovery cannot proceed.
+            do { try blockOnFailure() }
+            catch { throw GuardError("PF attachment preparation failed: \(failure); blocking could not be verified: \(error)") }
+            throw GuardError("PF attachment preparation failed: \(failure); blocking verified, repair is still required")
         }
+    }
+
+    private func prepareAttachmentRules() throws {
+        let live = try Command.checked("/sbin/pfctl", ["-sr"])
         try RootFiles.verify(Paths.pfConfig)
         try RootFiles.verify(Policy.anchorPath)
         let config = try String(contentsOfFile: Paths.pfConfig)
-        guard config.contains(Policy.configBlock) else {
-            throw GuardError("Missing managed PF attachment; install first")
+        _ = try Policy.removingAttachment(from: config)
+        if !config.contains(Policy.configBlock) {
+            let restored = try Policy.restoringDefaultAttachment(config, liveRules: live)
+            try restoreDefaultAttachment(config: config, restored: restored, live: live)
+            return
+        }
+        if Policy.attachedFirst(live) { return }
+        guard !live.contains(Policy.attachment) else {
+            throw GuardError("Another filter precedes Surge Guard; review PF ordering")
         }
         // The daemon must not depend on com.apple.pfctl running first at boot.
         try Command.checked("/sbin/pfctl", ["-n", "-f", Paths.pfConfig])
         try Command.checked("/sbin/pfctl", ["-f", Paths.pfConfig], timeout: 5)
         try requireAttachment()
+    }
+
+    // Caller holds the runtime lock, including start before it bootstraps the daemon.
+    private func restoreDefaultAttachment(config: String, restored: String, live: String) throws {
+        for path in [Paths.binary, Paths.plist, Paths.configuration, Paths.pfConfig + ".surge-guard.backup"] {
+            try RootFiles.verify(path)
+        }
+        let job = try PropertyListSerialization.propertyList(from: Data(contentsOf: URL(fileURLWithPath: Paths.plist)), options: [], format: nil) as? [String: Any]
+        guard job?["Label"] as? String == Paths.label,
+              job?["ProgramArguments"] as? [String] == [Paths.binary, "run"],
+              try String(contentsOfFile: Policy.anchorPath) == Policy.blocked else {
+            throw GuardError("PF attachment recovery requires the installed Guard job and default blocking anchor")
+        }
+        try Command.checked("/sbin/pfctl", ["-n", "-f", "-"], input: Policy.installationPreview(restored))
+        try Command.checked("/sbin/pfctl", ["-n", "-R", "-o", "none", "-f", "-"], input: Policy.restoredDefaultFilters)
+        try RootFiles.prepareRuntime()
+        let backup = Paths.runtime + "/pf.conf.before-attachment-repair"
+        if config != restored { try RootFiles.write(config, to: backup) }
+        try RootFiles.verify(Paths.pfConfig)
+        guard try String(contentsOfFile: Paths.pfConfig) == config,
+              try Command.checked("/sbin/pfctl", ["-sr"]) == live else {
+            throw GuardError("PF configuration changed during attachment recovery; retry after reviewing changes")
+        }
+        // -R excludes tables; the default optimizer can otherwise silently omit rules needing generated tables.
+        try Command.checked("/sbin/pfctl", ["-R", "-o", "none", "-f", "-"], input: Policy.restoredDefaultFilters, timeout: 5)
+        try requireAttachment()
+        guard try readRules().contains("label \"surge-guard-block\"") else {
+            throw GuardError("Restored attachment lacks verified blocking rules; disk configuration not changed")
+        }
+        try RootFiles.verify(Paths.pfConfig)
+        guard try String(contentsOfFile: Paths.pfConfig) == config else {
+            throw GuardError("PF configuration changed during attachment recovery; blocking rules retained, disk not overwritten")
+        }
+        if config != restored { try RootFiles.write(restored, to: Paths.pfConfig, mode: 0o644) }
+        EventLog.write("pf_attachment_restored", message: "Default PF attachment restored with blocking rules; enable/state-cleanup verification is still pending",
+                       details: ["configuration_repaired": config != restored, "backup_path": backup])
     }
 
     private func requireAttachment() throws {

@@ -32,6 +32,7 @@ install -m 700 "$project_dir/.build/release/surge-guard" "$user_dir/bin/surge-gu
 mv -f "$user_dir/bin/surge-guard-ui.new" "$user_dir/bin/surge-guard-ui"
 install -m 700 "$project_dir/integrations/swiftbar/surge-guard-action.sh" "$user_dir/bin/surge-guard-action"
 install -m 700 "$project_dir/integrations/swiftbar/surge-guard.5s.sh" "$user_dir/bin/surge-guard-menu"
+printf '%s\n' 'SwiftBar login startup is separate: enable Launch at Login in SwiftBar or add it to macOS Login Items, then verify after logging in again. Installing menu files does not enable it.'
 if [ "${1:-}" = --recovery-only ] || [ "${1:-}" = --menu-only ]; then
     printf '%s\n' 'Offline recovery menu installed without changing system/user services. Invoke surge-guard-menu --section in your combined plugin.'
     printf 'Previous user menu files: %s\n' "$user_backup"

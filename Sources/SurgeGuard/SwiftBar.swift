@@ -13,13 +13,17 @@ enum SwiftBar {
         let modern = ((try? Command.checked(Paths.binary, ["--help"])) ?? "").contains("restore-policy")
         let state = ["allowed", "blocked"].contains(status.state) && !status.firewallVerified ? "unknown" : status.state
         let icon = state == "allowed" ? "🟢" : state == "blocked" ? "🔴" : "🟠"
-        let title = !modern && status.daemonRunning ? "旧版运行 · PF 待验证" : ["allowed": "PF 已验证放行", "blocked": "PF 已验证阻断", "stopped": "守护已停止", "unknown": "状态未知", "unlocked": "已手动解除保护"][state] ?? "状态未知"
+        let attachmentFailure = status.reason.hasPrefix("pf_attachment_missing:") || status.reason.hasPrefix("pf_attachment_invalid:")
+        let title = attachmentFailure ? "PF 挂载配置异常 · 保护待验证" : !modern && status.daemonRunning ? "旧版运行 · PF 待验证" : ["allowed": "PF 已验证放行", "blocked": "PF 已验证阻断", "stopped": "守护已停止", "unknown": "状态未知", "unlocked": "已手动解除保护"][state] ?? "状态未知"
         var lines = sectionOnly ? [] : ["\(icon) | size=13", "---"]
         // SwiftBar 2.1.1 clears submenu actions during live updates; a color preserves the action.
         let parentStyle = " | color=#1F2937,#F2F2F7"
         let infoStyle = " | color=#1F2937,#F2F2F7"
         let noteStyle = " | color=#374151,#E5E7EB size=12"
         lines.append("surge-guard · \(icon) \(title)" + parentStyle)
+        if attachmentFailure {
+            lines.append("-- 系统升级后配置可能被重置；请查看完整诊断。当前未确认保护生效" + noteStyle)
+        }
         if let snapshot = status.snapshot {
             let current = status.firewallVerified
             let modeText = snapshot.configurationMode == "routes" ? "增强模式 + 分流检查" : "增强模式"

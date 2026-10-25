@@ -64,6 +64,25 @@ whole `pf.conf` is never restored. On explicit emergency removal, the previous
 PID must be gone before anchor clearing; verify protection-off display and
 Start/re-arm. Never silently use emergency removal to pass an upgrade test.
 
+For macOS-update recovery, use a disposable Mac/VM with a saved configuration
+and an authorized maintenance window. Test a reset to the recognized Apple
+default `pf.conf`, including empty live filters, existing Apple filters, and an
+interrupted repair with Guard already attached but its disk block still missing.
+Confirm the private pre-repair backup, original comments/Apple configuration,
+default scrub attachment, nested Apple/third-party anchors, NAT and PF options
+are retained. Verify the actual blocking rule after the filter-only load;
+`pfctl` returning zero alone is insufficient. Reject custom disk/live rules,
+partial markers, unexpected ownership, and concurrent edits without overwriting
+them. Inject a failed load/write and retry; verified protection must not be
+reported before enablement, old-state cleanup and a fresh status publication.
+Also test `unlock`/disabled-service behavior so recovery cannot silently re-arm
+an intentionally stopped job during the same boot. These tests do not establish
+behavior in every macOS installer/recovery environment or early-boot coverage.
+
+Enable SwiftBar's Launch at Login or register it in macOS Login Items, then log
+in again and confirm the menu, refresh entry and both fresh service states.
+Plugin installation alone does not configure or verify SwiftBar login startup.
+
 Verify the companion waits on recent system `allowed` status before each app
 launch. Test bundle IDs, ordering, an absent app, failed launch retry and a changed
 excluded-app setting. Confirm no lost pending apps. Verify periodic atomic

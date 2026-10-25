@@ -95,10 +95,34 @@ public struct StatusReport: Codable {
             try RootFiles.verify(Paths.publicState, directory: true)
             try RootFiles.verify(Paths.snapshot)
             let snapshot = try JSON.decode(GuardSnapshot.self, from: Data(contentsOf: URL(fileURLWithPath: Paths.snapshot)))
-            return try evaluate(service: service, snapshot: snapshot)
+            return diagnoseConfiguration(try evaluate(service: service, snapshot: snapshot))
         } catch {
-            return StatusReport(state: "unknown", daemonRunning: serviceRunning, snapshot: nil, reason: "status_unavailable: \(error)")
+            return diagnoseConfiguration(StatusReport(state: "unknown", daemonRunning: serviceRunning, snapshot: nil, reason: "status_unavailable: \(error)"))
         }
+    }
+
+    private static func diagnoseConfiguration(_ report: StatusReport) -> StatusReport {
+        guard ["unknown", "stopped"].contains(report.state),
+              (try? RootFiles.verify(Paths.pfConfig)) != nil,
+              let file = try? FileHandle(forReadingFrom: URL(fileURLWithPath: Paths.pfConfig)) else { return report }
+        defer { try? file.close() }
+        guard let data = try? file.read(upToCount: 65_537), data.count <= 65_536,
+              let config = String(data: data, encoding: .utf8) else { return report }
+        return report.diagnosingConfiguration(config)
+    }
+
+    public func diagnosingConfiguration(_ config: String) -> StatusReport {
+        guard ["unknown", "stopped"].contains(state) else { return self }
+        var result = self
+        do {
+            let base = try Policy.removingAttachment(from: config)
+            if base == config {
+                result.reason = "pf_attachment_missing: managed disk configuration is missing; " + reason
+            }
+        } catch {
+            result.reason = "pf_attachment_invalid: \(error); " + reason
+        }
+        return result
     }
 
     public static func evaluate(service: CommandResult, snapshot: GuardSnapshot) throws -> StatusReport {

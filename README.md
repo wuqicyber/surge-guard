@@ -311,6 +311,32 @@ original `/private/etc/pf.conf.surge-guard.backup` and refuses edited managed
 blocks. Initial attachment may reload the main ruleset; review custom PF users.
 Ordinary reconciliation updates only `io.github.surge-guard`.
 
+If a macOS update removes the managed attachment, the installed daemon/start
+command can restore it only when the disk file has the recognized Apple default
+rule layout and live filter rules are empty or contain only the expected Apple
+attachment (plus this guard when retrying an interrupted repair). A trusted
+installation, original installation backup and unchanged default blocking anchor
+are required. Custom rules, partial markers, conflicting order and unsafe files
+are refused; inspect `doctor` and logs before repairing those manually.
+The runtime lock serializes recovery. The last pre-repair configuration is saved
+privately at `/private/var/db/surge-guard/pf.conf.before-attachment-repair`.
+Recovery parses first, reloads only the filter attachments with inline blocking
+rules, and then atomically restores the disk attachment after checking for
+concurrent changes. It does not reload Apple's nested anchors, NAT or PF options.
+No `allowed`/`blocked` status is published until PF enablement, state cleanup and
+normal verification complete. If attachment preparation fails, Guard attempts
+its normal block operation before reporting the error, including when the old
+live anchor still permits traffic. A failed block is explicitly unverified.
+A disk attachment diagnostic is not evidence that
+live PF is blocking traffic. An unloaded/disabled guard is not restarted by a
+separate watcher; explicit `unlock` retains its start/next-boot semantics.
+
+This is recovery in the normal installed OS, not a cross-reboot OS-update
+maintenance mode or a promise of update compatibility. System updates can need
+networking while the ordinary OS and Guard are running. `update-pause` pauses
+Gate's Surge relaunch only; it does not exempt macOS updates from PF. After an OS
+upgrade, verify fresh Guard/Gate status and the menu. Keep the early-boot limits.
+
 The menu provides normal restart with result verification, Start/re-arm, Backup,
 Restore previous version/config, Restore previous policy, and Emergency remove
 block. Privileged actions open Terminal and explain the impact before requesting
@@ -348,6 +374,10 @@ plugin directory. Alternatively pass the plugin directory explicitly:
 ```sh
 scripts/install-user.sh "$HOME/Documents/SwiftBar"
 ```
+
+Installing a plugin does not enable SwiftBar at login. Enable SwiftBar's **Launch
+at Login** or add the app to macOS **Login Items**, then verify it after logging
+in again. Do not treat an already running menu as a login-startup acceptance.
 
 For an existing combined control-center plugin, update only the independent
 menu files (no Gate/Guard query, binary replacement or service restart):

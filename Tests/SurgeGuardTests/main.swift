@@ -1461,6 +1461,101 @@ do {
     try rejects { _ = try Command.checked("/sbin/pfctl", ["-n", "-f", "-"], input: installationPreview + "invalid-pf-syntax\n") }
     print("PASS: fresh-install native PF preflight parses the new anchor inline without requiring its file")
 
+    let appleDefault = """
+    # Apple default configuration, retained after an OS update
+    scrub-anchor "com.apple/*"
+    nat-anchor "com.apple/*"
+    rdr-anchor "com.apple/*"
+    dummynet-anchor "com.apple/*"
+    anchor "com.apple/*"
+    load anchor "com.apple" from "/etc/pf.anchors/com.apple"
+    # Keep this comment
+
+    """
+    let appleLive = "scrub-anchor \"com.apple/*\" all fragment reassemble\nanchor \"com.apple/*\" all\n"
+    for live in ["", "anchor \"com.apple/*\" all\n", appleLive,
+                 Policy.attachment + " all\nanchor \"com.apple/*\" all\n",
+                 "scrub-anchor \"com.apple/*\" all fragment reassemble\n" + Policy.attachment + " all\nanchor \"com.apple/*\" all\n"] {
+        let restored = try Policy.restoringDefaultAttachment(appleDefault, liveRules: live)
+        try check(try Policy.removingAttachment(from: restored) == appleDefault,
+                  "OS-update attachment recovery changed Apple's rules or comments")
+        try check(try Policy.restoringDefaultAttachment(restored, liveRules: live) == restored,
+                  "Interrupted attachment recovery is not idempotent")
+    }
+    for invalid in ["", config, appleDefault + "pass quick all\n", appleDefault + "set skip on en0\n",
+                    appleDefault + "nat on en0 from any to any -> (en0)\n",
+                    appleDefault + "anchor \"other.service\"\n", appleDefault + Policy.begin,
+                    appleDefault + Policy.end, appleDefault + "# " + Policy.anchor,
+                    appleDefault.replacingOccurrences(of: "/etc/pf.anchors/com.apple", with: "/tmp/other-anchor"),
+                    appleDefault.replacingOccurrences(of: "rdr-anchor \"com.apple/*\"", with: ""),
+                    appleDefault + String(repeating: "# comment\n", count: 8000)] {
+        try rejects { _ = try Policy.restoringDefaultAttachment(invalid, liveRules: appleLive) }
+    }
+    for invalid in ["pass quick all\n" + appleLive, appleLive + "anchor \"other.service\" all\n",
+                    appleLive + Policy.attachment + " all\n", appleLive + "anchor \"com.apple/*\" all\n",
+                    "scrub-anchor \"other/*\" all fragment reassemble\nanchor \"com.apple/*\" all\n",
+                    "scrub-anchor \"com.apple/*\" all fragment reassemble\n", "Permission denied\n"] {
+        try rejects { _ = try Policy.restoringDefaultAttachment(appleDefault, liveRules: invalid) }
+    }
+    let recoveryRules = try Command.checked("/sbin/pfctl", ["-n", "-v", "-R", "-o", "none", "-f", "-"], input: Policy.restoredDefaultFilters)
+    // pfctl -n prints wildcard anchor paths as /* before resolving them against the kernel.
+    try check(recoveryRules.contains("surge-guard-block") && recoveryRules.contains("scrub-anchor") &&
+              recoveryRules.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("anchor \"/*\" all"),
+              "Filter-only attachment recovery lost blocking rules or default wildcard attachments")
+    try check(!Policy.restoredDefaultFilters.contains("load anchor") && !Policy.restoredDefaultFilters.contains("nat-anchor"),
+              "Attachment recovery would reload unrelated anchor contents or NAT")
+    print("PASS: OS-update attachment recovery accepts only default layouts, retries interrupted attachment, and rejects custom rules")
+    print("PASS: native filter-only recovery includes blocking rules and retains the Apple attachment without reloading its contents")
+
+    var attachmentSteps: [String] = []
+    try Firewall.preparingAttachment({ attachmentSteps.append("prepared") }, blockOnFailure: {
+        throw GuardError("Unexpected block after successful preparation")
+    })
+    try check(attachmentSteps == ["prepared"], "Successful preparation entered the failure path")
+    for failure in ["unreadable PF file", "custom live layout", "backup write failed", "disk publish failed after live attachment"] {
+        attachmentSteps = []
+        do {
+            try Firewall.preparingAttachment({
+                attachmentSteps.append("prepare")
+                throw GuardError(failure)
+            }, blockOnFailure: { attachmentSteps.append("blocked") })
+            throw GuardError("Attachment failure was swallowed")
+        } catch {
+            try check(attachmentSteps == ["prepare", "blocked"] && String(describing: error).contains(failure) &&
+                      String(describing: error).contains("blocking verified, repair is still required"),
+                      "Failed preparation retained an old allow state or lost the original error")
+        }
+    }
+    do {
+        try Firewall.preparingAttachment({ throw GuardError("disk read failed") },
+                                         blockOnFailure: { throw GuardError("PF enable failed") })
+        throw GuardError("Unverified block was accepted")
+    } catch {
+        let message = String(describing: error)
+        try check(message.contains("disk read failed") && message.contains("PF enable failed") &&
+                  message.contains("blocking could not be verified") && !message.contains("blocking verified"),
+                  "Attachment/block failure lost evidence or claimed verified protection")
+    }
+    print("PASS: attachment preparation failures block before reporting errors and preserve failed-block uncertainty")
+
+    let missingStatus = try JSON.decode(StatusReport.self, from: Data("""
+    {"state":"unknown","daemon_running":false,"reason":"status_unavailable: original read error"}
+    """.utf8))
+    let diagnosed = missingStatus.diagnosingConfiguration(appleDefault)
+    try check(diagnosed.state == "unknown" && !diagnosed.firewallVerified &&
+              diagnosed.reason.hasPrefix("pf_attachment_missing:") && diagnosed.reason.contains(missingStatus.reason),
+              "Missing disk attachment hid the raw error or invented verified protection")
+    try check(missingStatus.diagnosingConfiguration(appleDefault + Policy.begin).reason.hasPrefix("pf_attachment_invalid:"),
+              "Partial PF attachment was mistaken for an ordinary missing file")
+    try check(missingStatus.diagnosingConfiguration(try Policy.attaching(to: appleDefault)).reason == missingStatus.reason,
+              "An intact attachment masked an unrelated status error")
+    for state in ["allowed", "blocked", "unlocked"] {
+        var report = missingStatus; report.state = state
+        try check(report.diagnosingConfiguration(appleDefault).reason == report.reason,
+                  "On-disk diagnostic overrode current PF status or manual unlock")
+    }
+    print("PASS: PF attachment diagnostics preserve unknown protection, raw status errors and explicit unlock state")
+
     for invalid in ["", Policy.begin, Policy.end,
                     "anchor \"com.apple/*\"\nanchor \"com.apple/*\"\n",
                     "# io.github.surge-guard\nanchor \"com.apple/*\"\n"] {

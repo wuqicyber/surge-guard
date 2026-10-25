@@ -1769,3 +1769,36 @@ Not performed: desktop screenshot/visual acceptance, cold boot or login-cycle
 acceptance, sleep/wake, deliberate live interface-enumeration failures, blocked-
 state LAN fault injection or a packet-by-packet audit. Startup/state cleanup may
 interrupt LAN sessions; UDP and early boot remain outside a zero-bypass claim.
+
+## Source verification — macOS-update attachment recovery, 2026-10-25
+
+- Added conservative recovery for a missing managed attachment in a recognized
+  Apple default disk/live layout. Recovery requires the protected existing
+  installation, keeps a private pre-repair backup, checks concurrent changes,
+  and retries a live attachment completed before the disk write. Custom layouts
+  and malformed markers remain errors. Management start now holds the runtime
+  lock while preparing the attachment.
+- Native parse-only testing found that `pfctl -R` with the default optimizer can
+  emit “Must enable table loading for optimizations” and omit the nested rules
+  while returning zero. The recovery load uses `-R -o none`; the regression
+  inspects emitted blocking rules and default wildcard attachments. Production
+  recovery also reads back the live block label before publishing disk changes.
+- Added bounded, read-only disk-attachment diagnostics to unknown/stopped status,
+  preserving raw status errors and never asserting verified PF from disk content.
+  The menu explains attachment failures. Installation output and both READMEs
+  now distinguish plugin installation from SwiftBar login-startup acceptance.
+- Commit review found that failed disk/backup checks could otherwise leave a
+  previously allowed live anchor unchanged during daemon startup. Preparation
+  failures now attempt normal verified blocking before returning the original
+  error. Callback fault tests cover failure before repair, failure after live
+  attachment, and an unsuccessful block without a false protection claim.
+- `scripts/check.sh` passed with 76 PASS lines, including the new default-layout,
+  interrupted-repair, custom-rule rejection, native filter-only parsing and
+  diagnostic-state cases, plus existing launcher/Gate checks and release builds.
+- No installed helper, user service, login item, live PF rule or Surge process
+  was changed. The existing untracked package-lock file was left untouched.
+
+Not performed: privileged live attachment repair, actual failed-write/load
+injection against PF, macOS update/reboot acceptance, SwiftBar login/visual
+acceptance, or deployment to another Mac. Passing these source checks does not
+establish live protection or compatibility with every installer environment.

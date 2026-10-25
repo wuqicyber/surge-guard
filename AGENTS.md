@@ -133,6 +133,15 @@ Read README.md first. It is the operational contract for all three components.
   owner publish run failures; a failed duplicate run must not overwrite status.
 - `install-user.sh --menu-only` and `--recovery-only` update independent menu
   files only; neither queries/restarts services nor replaces the Gate binary.
+- Missing PF attachments may be restored only for a trusted existing installation
+  with the recognized Apple default disk/live layout. Hold the runtime lock,
+  back up and recheck before writing, and attach inline blocking rules with a
+  filter-only load that preserves other anchors, NAT and options. Refuse custom
+  layouts. Retrying a repair interrupted between live attachment and disk write
+  must work. On preparation failure attempt blocking before throwing, preserving
+  the original error and any unverified-block failure. Restoration is not verified
+  PF enablement/state cleanup. Installing
+  menu files does not enable SwiftBar login startup; verify that separately.
 
 ## Validation and delivery
 
