@@ -1846,3 +1846,39 @@ Rule initialization interrupted an existing SSH channel before fresh LAN access
 recovered. Custom PF layouts still require manual review; this acceptance does
 not establish compatibility with every macOS installer environment or coverage
 of UDP and early-boot traffic.
+
+## 2026-10-25 — originating Mac upgrade acceptance
+
+Upgraded the originating Mac on macOS 15.7.7 from checkout e0f53ea, whose runtime
+sources match 353f790. Its existing PF attachment and Surge dedicated-group
+identity were healthy before installation; attachment repair was not exercised
+on this machine.
+
+Performed:
+
+- Ran `scripts/check.sh` successfully with 76 PASS lines, staged the tested
+  executables privately, and ran `install-user.sh --menu-only`. Verified the
+  independent recovery entries before administrator-authorized installation.
+- Used the official system installer, which retained a rollback backup and
+  returned verified allowed status. Installed Gate as the normal user afterward.
+  Read back enabled PF and the root attachment, LAN, VIF, dedicated-group and
+  persistent TCP-block rules.
+- Checked 45 consecutive allowed/ready samples, then independently checked both
+  services again. All six native readiness conditions passed, the new Guard had
+  one run, and the existing Surge PID remained unchanged throughout the upgrade.
+  Both service plists retained RunAtLoad and KeepAlive.
+- Compared all three installed runtime executables and the user menu renderer to
+  the tested build. Launcher validation passed with dedicated GID 60000 and mode
+  2755; Surge.app retained its ordinary-user owner. Policy, Gate configuration,
+  disk PF configuration and the combined SwiftBar plugin were byte-for-byte
+  unchanged. The section renderer reported verified permission and ready Gate;
+  the existing SwiftBar process remained running.
+- Connected to a private LAN SSH endpoint and read its protocol banner. A public
+  TCP attempt bound to the physical interface timed out while CONNECT through
+  Surge to the same endpoint succeeded. These bounded connection checks are not
+  a full packet audit. Backups and detailed evidence remain private.
+- Left the original untracked package-lock.json unchanged and uncommitted.
+
+Not performed: reboot/login-cycle, another macOS update, visual menu acceptance,
+deliberate live attachment damage, update rollback injection or packet-by-packet
+coverage testing. UDP and early-boot limitations remain unchanged.
