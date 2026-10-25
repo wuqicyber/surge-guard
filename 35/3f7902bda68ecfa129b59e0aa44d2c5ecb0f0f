@@ -1,0 +1,41 @@
+Sources/SurgeGuardCore/Policy.swift
+  s_932087378bf127::t_1c047d3102f91c 131-156
+docs/acceptance.md
+  s_932087378bf127::t_8d62b8f94a2ca5 67-85
+scripts/install-user.sh
+  s_932087378bf127::t_121e5c739adcb3 35
+AGENTS.md
+  s_932087378bf127::t_b8290e7adaf1ce 136-144
+README.md
+  s_932087378bf127::t_bc7e66088aafcf 314-339,378-381
+README.zh-CN.md
+  s_932087378bf127::t_ce569cb2a9f711 285-301,330-332
+Sources/SurgeGuard/Admin.swift
+  s_932087378bf127::t_41127acd4742ed 202-209
+Sources/SurgeGuard/SwiftBar.swift
+  s_932087378bf127::t_b615a8e86f6b8f 16-17,24-26
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_932087378bf127::t_78091ade6f8250 98,100,104-127
+Sources/SurgeGuardCore/Firewall.swift
+  s_932087378bf127::t_dc7174fb01c8d3 152-162,164-167,171-179,187-222
+Tests/SurgeGuardTests/main.swift
+  s_932087378bf127::t_aedf7710e757ca 1464-1558
+docs/verification.md
+  s_932087378bf127::t_51833ed50b66ca 1772-1804
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "353f7902bda68ecfa129b59e0aa44d2c5ecb0f0f",
+  "prompts": {},
+  "sessions": {
+    "s_932087378bf127": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15d05-6245-7853-8dba-0ae6c267a532",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
