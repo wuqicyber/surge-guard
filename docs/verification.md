@@ -1882,3 +1882,23 @@ Performed:
 Not performed: reboot/login-cycle, another macOS update, visual menu acceptance,
 deliberate live attachment damage, update rollback injection or packet-by-packet
 coverage testing. UDP and early-boot limitations remain unchanged.
+
+## 2026-10-25 — read-only software update compatibility checks
+
+With the upgraded guard allowed on macOS 15.7.7, `softwareupdate --list` completed
+successfully in about 14 seconds and listed macOS, Safari and Command Line Tools
+updates. No download/install/restart option was supplied. HTTPS HEAD requests to
+Apple update catalog/CDN hosts also completed with certificate validation; their
+401/404 responses establish HTTP reachability, not successful update downloads.
+Guard remained allowed with all six readiness conditions passing afterward.
+
+Code review confirms there is no Apple-update exemption or cross-reboot system
+update maintenance mode. Persistent TCP rejects public physical-interface traffic
+outside the Surge exceptions; failed readiness or configured route checks load
+blocking rules. Normal daemon termination retains blocking rules, and startup
+blocks before probing Surge. Default attachment recovery repairs post-update
+protection but does not remove these update-networking dependencies.
+
+Not performed: update payload download, preparation/personalization, firmware
+installation, reboot or first-login update completion. These read-only successes
+do not establish uninterrupted networking throughout a system update.
