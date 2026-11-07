@@ -1,0 +1,97 @@
+Sources/SurgeGuard/DiagnosticCommand.swift
+  s_616b0502aa1bad::t_395d055c7b4afa 1-104
+Sources/SurgeGuardCore/DiagnosticReport.swift
+  s_616b0502aa1bad::t_c894e97fa9b294 1-197
+Sources/SurgeGuardCore/Firewall.swift
+  s_91879aed19fa84::t_ea24a4b4175d6e 15,126,128-130,142-178,184-186,191-214,223-233,337-338,340,344,347,350,352,364-384,386,390,397,400-406,424,428,442,446,460-468
+Sources/SurgeGuardCore/Policy.swift
+  s_0d938d26fbe4e4::t_150f12d9f02a6a 54,70-71,74,81
+Sources/SurgeGuardCore/System.swift
+  s_91879aed19fa84::t_80213c284711fd 196-197,207,287-306,334-343,348-349,351-352,355
+Tests/SurgeGuardTests/DiagnosticTests.swift
+  s_616b0502aa1bad::t_d7021efe06763b 1-120
+Tests/SurgeGuardTests/main.swift
+  s_0d938d26fbe4e4::t_9840171ecb9188 6-20,122-126,266,807-812,833-836,848-849,858,862,869-891,896-904,984-1004,1009,1136,1317,1320,1350,1352,1383-1408
+docs/troubleshooting.md
+  s_616b0502aa1bad::t_5b2d473ab9b834 6-13
+scripts/check.sh
+  s_2b28648612b746::t_e0110a9baebe98 12,26-30
+AGENTS.md
+  s_91879aed19fa84::t_7d8d29ef957a69 25-26,65-67,111-119,124-127,162-175
+README.md
+  s_91879aed19fa84::t_5c40479478e4f7 93-95,134-137,160-161,196-205,243-244,248-260,263-268,274,366-382,384-449,456-457,522,526-529,539-548,621-631,669,680-681,687-730,733-737,772-780,788-791,938-941,950-951
+README.zh-CN.md
+  s_91879aed19fa84::t_fd3665fe9259aa 57-83,109,112-120,122-125,128-129,143-148,187-193,246-247,279-280,349-352,354-412,417-418,435-436,479-485,545-550,556-558,565-566
+Sources/SurgeGuard/Admin.swift
+  s_91879aed19fa84::t_3ce6e09e89feb6 195-200,209
+Sources/SurgeGuard/CLI.swift
+  s_91879aed19fa84::t_1c95916d46ec63 12-13,37-38,53-54,76-80,121-124,132-144,232,238-244,246-247
+Sources/SurgeGuard/SwiftBar.swift
+  s_91879aed19fa84::t_8356ee546a9b32 13-15,17,19-23,30-36,40,53-55,69-71,82-84,90-103,112-117,126,132,182-187,192,196,206-215,217-224
+Sources/SurgeGuard/SystemUpdateAdmin.swift
+  s_91879aed19fa84::t_d5130f922c43bb 1-101
+Sources/SurgeGuard/main.swift
+  s_91879aed19fa84::t_836588df1b90b2 41-42,48-54,111-112,184-201,214-215,243-244,247-250,252-260,264,266-267,270-272,283-290,341,355-357,377-381,385,396,410,494-495,497-498
+Sources/SurgeGuardCore/Configuration.swift
+  s_91879aed19fa84::t_b36f3606883aa6 183-208
+Sources/SurgeGuardCore/Diagnostics.swift
+  s_91879aed19fa84::t_68cbae0f16755e 41-44,48-49,62-63,66-68,72-73,83,86-112,121-123,130,132,139,141,146
+Sources/SurgeGuardCore/LANTCP.swift
+  s_91879aed19fa84::t_195c1779d27c81 3-20
+Sources/SurgeGuardCore/LogReader.swift
+  s_91879aed19fa84::t_daa97737f584da 63-69,71-72,86-88,93,144-153,170-177,202-204,327
+Sources/SurgeGuardCore/SystemUpdate.swift
+  s_91879aed19fa84::t_4dc74855dc25a1 1-112
+Sources/SurgeGuardCore/USBTCP.swift
+  s_91879aed19fa84::t_a04c92ea1cd1d2 1-132
+Tests/SurgeGuardTests/ProtectionTests.swift
+  s_91879aed19fa84::t_edd6078979d206 1-160
+Tests/SurgeGuardTests/USBTCPTests.swift
+  s_91879aed19fa84::t_3199e8a66cd836 1-75
+docs/acceptance.md
+  s_91879aed19fa84::t_6947dd154fc212 86-119,284-294,297-303,336-426
+docs/verification.md
+  s_91879aed19fa84::t_629815da489319 1895-1896,1905-2479
+integrations/swiftbar/surge-guard-action.sh
+  s_91879aed19fa84::t_1604691484378c 9-10,15-23,28-37,94-97,107-108,110,140-143,146-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "4f7c2d5f49e9559271351e143c30fb422adf37e2",
+  "prompts": {},
+  "sessions": {
+    "s_0d938d26fbe4e4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b3f3-46b8-7032-9b7b-3dafe11ce6d3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_2b28648612b746": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a63e-2529-75a3-b626-a37c572fd72f",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_616b0502aa1bad": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17d1d-69b8-7660-ae93-eb6ca2d7dee3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    },
+    "s_91879aed19fa84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b3f6-4d6a-7c72-937d-c10c5d1b709b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
