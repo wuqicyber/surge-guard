@@ -1,0 +1,21 @@
+Sources/SurgeGate/GateService.swift
+  s_91879aed19fa84::t_b167b40b92ab8f 208-209
+docs/verification.md
+  s_91879aed19fa84::t_b34c8351626d3d 2546-2565
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "f7ca0d0fc06a7fee583e43d26d9c14785a057a6d",
+  "prompts": {},
+  "sessions": {
+    "s_91879aed19fa84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b3f6-4d6a-7c72-937d-c10c5d1b709b",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
