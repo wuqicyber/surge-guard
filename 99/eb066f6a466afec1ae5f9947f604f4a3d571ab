@@ -1,0 +1,19 @@
+docs/verification.md
+  s_91879aed19fa84::t_111808def176ee 2566-2604
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "99eb066f6a466afec1ae5f9947f604f4a3d571ab",
+  "prompts": {},
+  "sessions": {
+    "s_91879aed19fa84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b3f6-4d6a-7c72-937d-c10c5d1b709b",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
