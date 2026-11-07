@@ -1,0 +1,23 @@
+Tests/SurgeGuardTests/ProtectionTests.swift
+  s_91879aed19fa84::t_d6a7709163b335 119-123,125-138,140,142,144-157
+integrations/swiftbar/surge-guard-action.sh
+  s_91879aed19fa84::t_48536244d5f181 7-50,53-54,59,186-187
+scripts/install-user.sh
+  s_91879aed19fa84::t_0d1c406c0b0428 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "51c5b19e8bed8800510742ef74443cfdb895d742",
+  "prompts": {},
+  "sessions": {
+    "s_91879aed19fa84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b3f6-4d6a-7c72-937d-c10c5d1b709b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
