@@ -1,0 +1,39 @@
+Sources/SurgeGate/GateService.swift
+  s_91879aed19fa84::t_a6b8a53812f64f 49,63,390,392,395-396,398,400-401,404,463
+Sources/SurgeGuard/DiagnosticCommand.swift
+  s_91879aed19fa84::t_672940093aa5c6 20,22-23
+Sources/SurgeGuard/SystemUpdateAdmin.swift
+  s_91879aed19fa84::t_11040706b529c2 66-69,79-82
+Sources/SurgeGuardCore/DiagnosticReport.swift
+  s_91879aed19fa84::t_c9a7e697ff70a9 110,113-128,190-205,215-219
+Sources/SurgeGuardCore/GateUpdate.swift
+  s_91879aed19fa84::t_c5ee42150dbb1a 65,178-187
+Sources/SurgeGuardCore/System.swift
+  s_91879aed19fa84::t_9a37ec72c3ef8c 8-9,108-109,133
+Sources/SurgeGuardCore/SystemUpdate.swift
+  s_91879aed19fa84::t_381a05977bd2b5 84-110
+Tests/SurgeGuardTests/DiagnosticTests.swift
+  s_91879aed19fa84::t_9d63202856c30a 120-186
+Tests/SurgeGuardTests/GateLaunchTests.swift
+  s_91879aed19fa84::t_2e2688b3797bfd 42-51,67-100
+Tests/SurgeGuardTests/SystemUpdateTests.swift
+  s_91879aed19fa84::t_f92c1dc31472be 139-230
+Tests/SurgeGuardTests/main.swift
+  s_91879aed19fa84::t_326485b3f9a883 6-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "cd0656fa6686d5a9e20d02dd94db68af9c630198",
+  "prompts": {},
+  "sessions": {
+    "s_91879aed19fa84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b3f6-4d6a-7c72-937d-c10c5d1b709b",
+        "model": "unknown"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
