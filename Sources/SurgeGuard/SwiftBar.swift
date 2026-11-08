@@ -108,7 +108,7 @@ enum SwiftBar {
             command("🔓 暂停保护并放行网络（应急退出，下次启动或开机恢复）", ["unlock"], root: true)
         }
         lines.append("-----")
-        command("🔍 重新检查放行条件", ["check"])
+        command("🔍 重新检查放行条件（管理员只读）", ["check"], root: true)
         command("🧾 合并检查最近 20 分钟（只读，保存私有报告）", ["diagnose"])
         if FileManager.default.isExecutableFile(atPath: actionHelper) {
             command("⏱️ 开始 120 秒 DNS／QUIC 诊断（自动结束）", ["diagnose-watch"])

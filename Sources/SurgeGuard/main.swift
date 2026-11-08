@@ -278,6 +278,13 @@ final class Daemon {
                                          "event_to_block_verified_ms": max(0, (timing.statesClearedUptime - received) * 1000)])
             }
             try firewall.rememberAddresses()
+            if firewall.addressHistoryNeedsCompaction {
+                let timing = try firewall.block()
+                allowed = false
+                firewallVerified = timing.statesClearedUptime
+                invalidateSession()
+                EventLog.write("address_history_compacted", message: "Blocked and cleared remembered local-address states before rolling the bounded checkpoint", details: ["run_id": runID])
+            }
             let now = SystemClock.seconds
             if forceFirewallAudit || now >= nextFirewallAudit {
                 nextFirewallAudit = now + 5

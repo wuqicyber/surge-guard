@@ -48,6 +48,20 @@ For each transition, record the time, `surge-guard check`, root `status`, logs, 
 
 ## Companion and menu acceptance
 
+For address-history rollover, use isolated fixtures to start at exactly 512
+remembered addresses, add a new address and simulate replacement before cleanup.
+The bounded transitional checkpoint must retain old and new addresses. Cleanup
+and final-write failure must preserve retry evidence, and repeated address churn
+must converge after successful cleanup rather than grow until startup fails.
+Live rollover uses the normal own-anchor block and local-address state cleanup;
+it can reset connections. Do not delete a real checkpoint to force startup or
+globally flush PF state. Keep a private original copy during recovery.
+
+Verify the menu's fresh-condition action authenticates the fixed installed Guard
+for a read-only check. It must never run the user-owned renderer as root. A missing
+status file should be reported as missing, not as an ownership mismatch; absent
+status still cannot establish live PF permission.
+
 For a primary tunnel absent from Setup/SCPreferences, also verify the
 [kernel ownership backend](native-tunnel.md) with administrator read-only doctor.
 Confirm the signed provider's native PID/birth identity and connected kernel

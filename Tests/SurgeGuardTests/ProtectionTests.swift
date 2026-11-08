@@ -67,7 +67,8 @@ func protectionTests() throws {
     var previousBoot: [String] = []
     try rejects { try Firewall(historyPath: path).clearStates(addresses: { [] }) { previousBoot.append($0) } }
     try check(previousBoot.isEmpty, "Previous-boot addresses became current state cleanup dependencies")
-    for addresses in [["192.0.2.1/24"], ["192.0.2.1\u{0}ignored"], ["192.0.2.1", "192.0.2.1"], Array(repeating: "::1", count: 513)] {
+    for addresses in [["192.0.2.1/24"], ["192.0.2.1\u{0}ignored"], ["192.0.2.1", "192.0.2.1"],
+                      (1...1025).map({ "2001:db8::" + String($0, radix: 16) })] {
         try fixture(addresses)
         var cleared: [String] = []
         try rejects { try Firewall(historyPath: path).clearStates(addresses: { ["192.0.2.20"] }) { cleared.append($0) } }
