@@ -390,10 +390,17 @@ from the explicit system-update maintenance mode below and is not a promise of
 compatibility with every installer environment. System updates can need networking
 while Guard is running; Gate's `update-pause` alone does not exempt them from PF.
 Old non-loopback addresses are retained in the private, boot-bound
-`/private/var/db/surge-guard/addresses.json` checkpoint (at most 512 addresses and
-64 KiB). A replacement daemon loads it before state cleanup. Failed enumeration
-or cleanup retains retry evidence; invalid history prevents verified protection
-and still attempts cleanup for currently enumerated addresses.
+`/private/var/db/surge-guard/addresses.json` checkpoint (at most 1024 addresses and
+64 KiB). After the normal 512-address rollover target, stale history is compacted
+through the existing block/state-cleanup transition. Extra bounded headroom first
+persists newly observed addresses together with old ones, so a crash before
+cleanup cannot forget them. Only successful cleanup and checkpoint publication
+replace the history with the current inventory. This can briefly reset connections
+during sustained interface-address churn; it never flushes all PF states.
+A replacement daemon loads the same checkpoint before cleanup. Enumeration,
+cleanup or write failure retains retry evidence and prevents verified protection.
+Older 512-address readers can reject a transitional larger checkpoint: do not
+downgrade during an unresolved rollover; retain the upgraded recovery binary.
 
 ### macOS system-update maintenance
 

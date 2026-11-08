@@ -2743,3 +2743,34 @@ or packet-level/no-bypass acceptance. The kernel backend remains reactive on
 available events plus the existing fallback poll; there is no fixed FD-closure
 notification deadline. URL-default-context route matching is not PROCESS-NAME
 acceptance, and fresh status does not prove universal packet coverage.
+
+## Address-history exhaustion recovery — 2026-11-07
+
+Investigated a target-machine incident after a long allowed run. The retained
+checkpoint was valid, root-owned/private and from the current boot, with exactly
+512 distinct addresses. The current inventory introduced another address; its
+union contained 513 entries. The old writer rejected that union, and startup
+cleanup hit the same limit. The guard could not publish status. An independent
+emergency unlock was subsequently observed; it left the service absent and own
+anchor empty. Raw addresses, logs, diagnosis and timestamps identifying local
+processes remain outside Git.
+
+Implemented:
+
+- Retain the 512-address rollover target with a hard 1024-address / 64 KiB
+  checkpoint bound. Newly observed and old addresses are made durable together
+  before cleanup. Rollover uses the existing blocking/state-cleanup path, updates
+  verified PF time and invalidates routing evidence before reopening.
+- Publish only the active inventory after successful cleanup and durable final
+  publication. Failed cleanup or final writing retains complete on-disk and
+  in-memory evidence for retry. Malformed/unsafe/oversized input still fails closed.
+- Fresh SwiftBar checks authenticate only the installed root-owned Guard.
+  The ordinary user renderer is never elevated. Missing-file metadata errors are
+  distinct from existing-file ownership/type failures.
+
+Source validation and actual recovery are recorded separately. Regression
+fixtures cover 512-to-513 growth, replacement with a transitional checkpoint,
+cleanup failure, final-write failure, repeated synthetic interface churn and
+the hard upper limit. No test mutates live PF or deletes a real checkpoint.
+Older 512-entry readers can reject a retained larger transitional checkpoint;
+complete recovery before attempting a downgrade.

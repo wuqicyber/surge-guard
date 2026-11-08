@@ -27,8 +27,12 @@ public enum RootFiles {
     }
     public static func verify(_ path: String, directory: Bool = false) throws {
         var info = stat()
-        guard lstat(path, &info) == 0,
-              info.st_uid == 0, info.st_mode & 0o022 == 0,
+        guard lstat(path, &info) == 0 else {
+            let failure = errno
+            if failure == ENOENT { throw GuardError("Required \(directory ? "directory" : "file") does not exist: \(path)") }
+            throw GuardError("Cannot inspect required \(directory ? "directory" : "file"): \(path), errno \(failure)")
+        }
+        guard info.st_uid == 0, info.st_mode & 0o022 == 0,
               info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG) else {
             throw GuardError("Expected a root-owned, non-writable-by-others \(directory ? "directory" : "file"): \(path)")
         }
@@ -126,7 +130,9 @@ public final class Firewall {
     public private(set) var usbTCPBindings: [USBTCPBinding] = []
     private var knownAddresses = Set<String>()
     private let historyPath: String?
+    private let writeHistory: (String, String) throws -> Void
     private var historyLoaded = false
+    public private(set) var addressHistoryNeedsCompaction = false
     private var revokedLocalStates = Set<[String]>()
     private var expectedRules: String?
     private let tokenPath = Paths.runtime + "/pf-token"
@@ -139,7 +145,11 @@ public final class Firewall {
     private var blockCounterContinuity = true
     private var nextBlockCounterSample: Double = 0
 
-    public init(historyPath: String? = Paths.addressHistory) { self.historyPath = historyPath }
+    public init(historyPath: String? = Paths.addressHistory,
+                writeHistory: @escaping (String, String) throws -> Void = { try RootFiles.write($0, to: $1) }) {
+        self.historyPath = historyPath
+        self.writeHistory = writeHistory
+    }
 
     private struct AddressHistory: Codable {
         let version: Int
@@ -147,7 +157,9 @@ public final class Firewall {
         let addresses: [String]
 
         func validate() throws {
-            guard version == 1, !bootId.isEmpty, bootId.utf8.count <= 128, addresses.count <= 512,
+            // 512 is the rollover target; the remaining bounded space preserves
+            // newly observed addresses before old states can safely be cleared.
+            guard version == 1, !bootId.isEmpty, bootId.utf8.count <= 128, addresses.count <= 1024,
                   Set(addresses).count == addresses.count, addresses.allSatisfy({ address in
                       var ipv4 = in_addr(), ipv6 = in6_addr()
                       return address.utf8.count <= 45 && !address.utf8.contains(0) &&
@@ -168,13 +180,13 @@ public final class Firewall {
         historyLoaded = true
     }
 
-    private func saveAddressHistory() throws {
+    private func saveAddressHistory(addresses: Set<String>? = nil) throws {
         guard let historyPath else { return }
-        let history = AddressHistory(version: 1, bootId: SystemClock.bootID, addresses: knownAddresses.sorted())
+        let history = AddressHistory(version: 1, bootId: SystemClock.bootID, addresses: (addresses ?? knownAddresses).sorted())
         try history.validate()
         let encoded = try JSON.encode(history)
         guard encoded.utf8.count <= 65_536 else { throw GuardError("PF address history exceeds its size limit") }
-        try RootFiles.write(encoded, to: historyPath)
+        try writeHistory(encoded, historyPath)
     }
 
     @discardableResult
@@ -333,11 +345,15 @@ public final class Firewall {
         }
     }
 
-    public func rememberAddresses() throws {
+    public func rememberAddresses(addresses: () throws -> Set<String> = {
+        Set(try Probe.addresses().filter { !$0.loopback }.map(\.address))
+    }) throws {
         try loadAddressHistory()
+        let current = try addresses()
         let previous = knownAddresses
-        knownAddresses.formUnion(try Probe.addresses().filter { !$0.loopback }.map(\.address))
+        knownAddresses.formUnion(current)
         if knownAddresses != previous { try saveAddressHistory() }
+        addressHistoryNeedsCompaction = knownAddresses.count > 512 && knownAddresses != current
     }
 
     public func clearStates(addresses: () throws -> Set<String>, clear: (String) throws -> Void) throws {
@@ -348,8 +364,10 @@ public final class Firewall {
         // Enumeration failure must not skip cleanup of addresses already observed while allowed.
         for address in knownAddresses.sorted() { try clear(address) }
         try saved.get()
-        knownAddresses = try current.get()
-        try saveAddressHistory()
+        let retained = try current.get()
+        try saveAddressHistory(addresses: retained)
+        knownAddresses = retained
+        addressHistoryNeedsCompaction = false
     }
 
     public func readRules() throws -> String {

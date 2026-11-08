@@ -29,6 +29,9 @@ if .build/release/surge-guard diagnose --minutes 0 --json; then
     exit 1
 fi
 .build/release/surge-gate --help
+check_menu=$(.build/release/surge-guard swiftbar --section)
+printf '%s\n' "$check_menu" | /usr/bin/grep -Fq 'bash="/usr/bin/sudo" param1="/Library/PrivilegedHelperTools/surge-guard" param2="check"'
+printf '%s\n' 'PASS: SwiftBar fresh checks authenticate only the installed root-owned Guard, never the user renderer'
 printf '%s\n' '{"event":"gate_state","app":"","message":"1 application(s) pending"}' | .build/release/surge-guard format-logs | /usr/bin/grep -q '剩余 1 个应用'
 sh -n scripts/install-user.sh
 sh -n integrations/swiftbar/surge-guard.5s.sh
