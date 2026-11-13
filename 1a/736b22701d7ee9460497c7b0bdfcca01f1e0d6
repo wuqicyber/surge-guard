@@ -1,0 +1,19 @@
+Sources/SurgeGuard/Admin.swift
+  s_4cc667004fe9e2::t_61849ec7cfd6b6 82-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "1a736b22701d7ee9460497c7b0bdfcca01f1e0d6",
+  "prompts": {},
+  "sessions": {
+    "s_4cc667004fe9e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cfd92008-3887-43e1-9d2b-1345f1ec0f33",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
