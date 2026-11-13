@@ -80,16 +80,23 @@ func protectionTests() throws {
     let local = Firewall(historyPath: nil)
     try local.setLANTCP([LANTCPBinding(interface: "en0", address: "192.168.1.2")])
     try local.setUSBTCP([USBTCPBinding(interface: "en11", address: "fe80::1234")])
+    try local.setAWDLTCP([USBTCPBinding(interface: "awdl0", address: "fe80::abcd")])
     try local.setUSBTCP([])
     var arguments: [[String]] = []
     try rejects { try local.clearRevokedLocalStates { arguments.append($0); throw GuardError("cleanup failed") } }
     arguments = []
     try local.clearRevokedLocalStates { arguments.append($0) }
     try check(Set(arguments) == [["-k", "fe80::1234", "-k", "fe80::/10"], ["-k", "fe80::/10", "-k", "fe80::1234"]] &&
-              local.lanTCPBindings.count == 1, "USB revocation forgot retry state, revoked LAN or cleared unrelated endpoints")
+              local.lanTCPBindings.count == 1 && local.awdlTCPBindings.count == 1,
+              "USB revocation forgot retry state, revoked LAN/AWDL or cleared unrelated endpoints")
     arguments = []
     try local.clearRevokedLocalStates { arguments.append($0) }
     try check(arguments.isEmpty, "Successful local cleanup replayed pending removals")
+    try local.setAWDLTCP([])
+    try local.clearRevokedLocalStates { arguments.append($0) }
+    try check(Set(arguments) == [["-k", "fe80::abcd", "-k", "fe80::/10"], ["-k", "fe80::/10", "-k", "fe80::abcd"]],
+              "AWDL revocation cleared unexpected peers")
+    arguments = []
     try local.setLANTCP([])
     try local.clearRevokedLocalStates { arguments.append($0) }
     try check(arguments.count == 6 && arguments.allSatisfy { $0.count == 4 && $0.contains("192.168.1.2") && !$0.contains("0.0.0.0/0") },
@@ -98,15 +105,23 @@ func protectionTests() throws {
 
     let lan = LANTCPBinding(interface: "en0", address: "192.168.1.2")
     let usb = USBTCPBinding(interface: "en11", address: "fe80::1234")
-    let usbFailure = LocalTCPInventory(addresses: { [] }, lan: { _ in [lan] }, usb: { _ in throw GuardError("USB unavailable") })
-    try check(usbFailure.lan == [lan] && usbFailure.usb.isEmpty && usbFailure.errors == ["usb_tcp_inventory_failed: USB unavailable"],
-              "USB inventory failure revoked the valid LAN scope")
-    let lanFailure = LocalTCPInventory(addresses: { [] }, lan: { _ in throw GuardError("LAN unavailable") }, usb: { _ in [usb] })
-    try check(lanFailure.lan.isEmpty && lanFailure.usb == [usb] && lanFailure.errors.count == 1,
-              "LAN inventory failure revoked the verified USB scope")
+    let awdl = USBTCPBinding(interface: "awdl0", address: "fe80::abcd")
+    let usbFailure = LocalTCPInventory(addresses: { [] }, lan: { _ in [lan] }, usb: { _ in throw GuardError("USB unavailable") }, awdl: { _ in [awdl] })
+    try check(usbFailure.lan == [lan] && usbFailure.usb.isEmpty && usbFailure.awdl == [awdl] &&
+              usbFailure.errors == ["usb_tcp_inventory_failed: USB unavailable"],
+              "USB inventory failure revoked the valid LAN or AWDL scope")
+    let lanFailure = LocalTCPInventory(addresses: { [] }, lan: { _ in throw GuardError("LAN unavailable") }, usb: { _ in [usb] }, awdl: { _ in [awdl] })
+    try check(lanFailure.lan.isEmpty && lanFailure.usb == [usb] && lanFailure.awdl == [awdl] && lanFailure.errors.count == 1,
+              "LAN inventory failure revoked the verified USB or AWDL scope")
+    let awdlFailure = LocalTCPInventory(addresses: { [] }, lan: { _ in [lan] }, usb: { _ in [usb] }, awdl: { _ in throw GuardError("AWDL unavailable") })
+    try check(awdlFailure.lan == [lan] && awdlFailure.usb == [usb] && awdlFailure.awdl.isEmpty &&
+              awdlFailure.errors == ["awdl_tcp_inventory_failed: AWDL unavailable"],
+              "AWDL inventory failure revoked the valid LAN or USB scope")
     let missingInventory = LocalTCPInventory(addresses: { throw GuardError("interfaces unavailable") },
-                                            lan: { _ in throw GuardError("should not query") }, usb: { _ in throw GuardError("should not query") })
-    try check(missingInventory.lan.isEmpty && missingInventory.usb.isEmpty && missingInventory.errors == ["interface_inventory_failed: interfaces unavailable"],
+                                            lan: { _ in throw GuardError("should not query") }, usb: { _ in throw GuardError("should not query") },
+                                            awdl: { _ in throw GuardError("should not query") })
+    try check(missingInventory.lan.isEmpty && missingInventory.usb.isEmpty && missingInventory.awdl.isEmpty &&
+              missingInventory.errors == ["interface_inventory_failed: interfaces unavailable"],
               "Failed address enumeration retained a local exception or queried incomplete inventory")
     let warningSnapshot = GuardSnapshot(runId: "fixture", firewallVerifiedUptime: SystemClock.seconds, allowed: true,
                                         configurationMode: "enhanced", readiness: nil, session: nil, reasons: [], localTcpErrors: usbFailure.errors)
@@ -179,6 +194,32 @@ func protectionTests() throws {
     }
     try rejects { _ = try SessionObservation.collect(configuration: configuration) { _ in "{}" } }
     print("PASS: bounded concurrent rule queries preserve URL order, configuration binding and fail-closed errors")
+
+    var snapshot = GuardSnapshot(runId: "fixture", firewallVerifiedUptime: SystemClock.seconds, allowed: false,
+                                 configurationMode: "routes", readiness: nil, session: observation, reasons: [],
+                                 sessionCheckedUptime: 100)
+    try check(snapshot.sessionFresh(now: 102.999) && !snapshot.sessionFresh(now: 103),
+              "Menu route freshness extended the original three-second dispatch budget")
+    snapshot.reasons = ["rule_probe_expired"]
+    try check(!snapshot.sessionFresh(now: 101), "An explicitly expired result remained current in the menu")
+    snapshot.reasons = []
+    for started in [Double.nan, .infinity, -1, 104] {
+        snapshot.sessionCheckedUptime = started
+        try check(!snapshot.sessionFresh(now: 103), "Invalid or future route timing passed menu freshness")
+    }
+    snapshot.sessionCheckedUptime = 100
+    let encoded = try JSON.encode(snapshot)
+    let decoded = try JSON.decode(GuardSnapshot.self, from: Data(encoded.utf8))
+    try check(decoded.sessionCheckedUptime == 100 && decoded.sessionFresh(now: 101),
+              "Route dispatch time was not preserved in status JSON")
+    var legacy = try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as! [String: Any]
+    legacy.removeValue(forKey: "session_checked_uptime")
+    let old = try JSON.decode(GuardSnapshot.self, from: JSONSerialization.data(withJSONObject: legacy))
+    try check(old.sessionCheckedUptime == nil && !old.sessionFresh(now: 101),
+              "Missing legacy route timing became a fresh route result")
+    snapshot.session = nil
+    try check(!snapshot.sessionFresh(now: 101), "Missing route results passed menu freshness")
+    print("PASS: menu route evidence expires at three seconds and retains uncertainty for legacy or invalid timing")
 
     try check(Policy.blocked.contains("from (self) port 68 to any port 67 user root tag SG_LINK no state") &&
               !Policy.blocked.contains("port 53"), "DHCP renewal widened into an ordinary-user or DNS exception")

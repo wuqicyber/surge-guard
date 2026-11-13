@@ -125,8 +125,34 @@ public enum USBTCP {
         }
         return bindings.flatMap { binding in
             let peer = binding.interface.hasPrefix("utun") ? tunnelNetwork(binding.address)! : "fe80::/10"
-            return ["pass in quick on \(binding.interface) inet6 proto tcp from \(peer) to \(binding.address) flags S/SA keep state (if-bound) label \"surge-guard-usb-in\"",
-                    "pass out quick on \(binding.interface) inet6 proto tcp from \(binding.address) to \(peer) flags S/SA keep state (if-bound) label \"surge-guard-usb-out\""]
+            return ipv6Rules(interface: binding.interface, address: binding.address, peer: peer, labelPrefix: "surge-guard-usb")
+        }.map { $0 + "\n" }.joined()
+    }
+
+    public static func ipv6Rules(interface: String, address: String, peer: String, labelPrefix: String) -> [String] {
+        ["pass in quick on \(interface) inet6 proto tcp from \(peer) to \(address) flags S/SA keep state (if-bound) label \"\(labelPrefix)-in\"",
+         "pass out quick on \(interface) inet6 proto tcp from \(address) to \(peer) flags S/SA keep state (if-bound) label \"\(labelPrefix)-out\""]
+    }
+}
+
+/// Restricts Apple Wireless Direct Link (AWDL) TCP exceptions to active link-local IPv6 addresses on awdl0.
+public enum AWDLTCP {
+    public static func bindings(addresses: [InterfaceAddress]) throws -> [USBTCPBinding] {
+        let bindings = Set(addresses.filter {
+            $0.up && !$0.loopback && $0.name == "awdl0" && USBTCP.linkLocalIPv6($0.address)
+        }.map { USBTCPBinding(interface: $0.name, address: $0.address) })
+            .sorted { ($0.interface, $0.address) < ($1.interface, $1.address) }
+        _ = try rules(bindings: bindings)
+        return bindings
+    }
+
+    public static func rules(bindings: [USBTCPBinding]) throws -> String {
+        guard bindings.count <= 64, Set(bindings).count == bindings.count,
+              bindings.allSatisfy({ $0.interface == "awdl0" && USBTCP.linkLocalIPv6($0.address) }) else {
+            throw GuardError("AWDL TCP rules require unique link-local IPv6 addresses on awdl0")
+        }
+        return bindings.flatMap {
+            USBTCP.ipv6Rules(interface: $0.interface, address: $0.address, peer: "fe80::/10", labelPrefix: "surge-guard-awdl")
         }.map { $0 + "\n" }.joined()
     }
 }

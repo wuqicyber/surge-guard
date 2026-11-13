@@ -2774,3 +2774,159 @@ cleanup failure, final-write failure, repeated synthetic interface churn and
 the hard upper limit. No test mutates live PF or deletes a real checkpoint.
 Older 512-entry readers can reject a retained larger transitional checkpoint;
 complete recovery before attempting a downgrade.
+
+## 2026-11-10 — Read-only route-expiry incident review
+
+Fast-forwarded the source checkout to `5ed4896`. The installed services were not
+updated. The upstream address-history rollover change does not alter route-probe
+freshness or fix the incident reviewed here.
+
+Performed:
+
+- Correlated retained unified Guard events with the private user-owned Gate log.
+  Three route-expiry block/recovery pairs were recorded; own PF block counters
+  increased. A Surge CLI status query also reported that it could not find the
+  local Surge instance, and the independent passive nettop sampler timed out.
+  These establish query/observation failures, not a cause inside Surge or the
+  system scheduler. Raw events and local policy details remain outside Git.
+- Confirmed that the Guard job remained running without a recorded exit and
+  found no sleep/wake transition in the inspected power-log window. Subsequent
+  Guard status was fresh/allowed and Gate was fresh/ready with no pending apps.
+- Traced route freshness from probe dispatch through the three-second expiry
+  check. The menu's readiness label describes native readiness; its route check
+  mark describes the retained decision. Neither separately proves a still-fresh
+  route result, so both can appear successful alongside an expiry/block reason.
+- `scripts/check.sh` passed with 110 PASS records, including standalone Swift/C
+  regressions, warnings-as-errors release builds, CLI/example checks, parse-only
+  PF checks, recovery dependency preflight, shell syntax and whitespace checks.
+  The release `check --json` and `status --json` returned parseable JSON with
+  ready route conditions and the existing daemon's allowed state respectively.
+
+Not performed: privileged private-log reads or live PF inspection (`sudo -n`
+required authentication), deployment, service/application restarts, policy or
+PF changes, deliberate fault reproduction, packet capture or packet-level
+acceptance. Event publication intervals are not complete block durations or
+failure-to-packet-block measurements. Successful-probe timing was not retained
+for this incident, so CLI delay, callback scheduling and other probe work cannot
+be apportioned from the available evidence. No protection logic was changed.
+
+## 2026-11-10 — Route freshness display and transition timing
+
+Implemented a source-only correction after the route-expiry review:
+
+- Normal snapshots expose optional `session_checked_uptime` from the original
+  query dispatch. Native readiness is labeled separately from route freshness.
+  The menu marks expired, explicitly invalidated, missing or untimed route
+  evidence as history rather than showing a current successful check mark.
+  Legacy snapshots remain readable, with route age shown as unknown.
+- Existing route state-transition events include dispatch delay, helper query
+  duration, main-queue delivery delay, generation matching, in-flight state and
+  cached-result age when available. Unchanged polls do not add log events.
+- Three-second permission expiry, refresh scheduling, generation rejection,
+  PF rules, user policy and root-to-user privilege dropping remain unchanged.
+
+Performed:
+
+- `scripts/check.sh` passed with 111 PASS records, including release builds with
+  warnings as errors and the existing Swift/C, lock, CLI, shell and PF parse-only
+  checks. Added exact three-second-boundary, explicit-expiry, missing-result,
+  invalid/future-time, JSON round-trip and legacy-status regression cases.
+- The release condition check returned parseable JSON and ready route results.
+  Rendering the existing older daemon's snapshot displayed native readiness,
+  unknown route age and history marks as intended; it did not change services.
+- Five installed normal-user read-only condition checks all succeeded, taking
+  approximately 51–88 ms. This is a recovery observation, not reproduction of
+  the incident or proof about the privileged helper's timing under load.
+
+Not performed: deployment, privileged log/PF inspection, changing policy or
+services, real delayed-helper/main-queue fault injection, sleep/wake, packet
+capture or enforcement acceptance. The underlying transient query/scheduling
+failure is not established or fixed by this display/diagnostic change. New
+transition timings require deploying the updated daemon; the renderer alone
+cannot recover missing timing evidence from an older daemon.
+
+## 2026-11-10 — Authorized Guard and menu deployment
+
+Deployed base revision `5ed4896` plus the local route-age/menu/transition-timing
+changes and the staged-executable startup correction described below. These
+local changes were not committed or pushed during deployment.
+
+The first installation attempt aborted before stopping the old service: macOS
+first-execution policy scanning of the staged helper consumed approximately
+2.95 seconds of its three-second route-query budget. Retained system policy logs
+show the scan allowing execution just before the query deadline. The original
+daemon PID and allowed state remained intact. The installer now executes the
+root-owned staged binary's non-mutating `--help` with a separate ten-second
+startup limit before running the unchanged three-second session preflight.
+Startup-check failure still aborts before backup/service replacement; no runtime
+freshness limit, privilege-drop check or signature policy was relaxed.
+
+Performed:
+
+- After that correction, `scripts/check.sh` passed again with 111 PASS records,
+  including warnings-as-errors release builds and existing command timeout/help,
+  route freshness, lock, CLI, shell, recovery and parse-only PF checks.
+- Updated the independent user recovery/menu files before each privileged
+  attempt. The installed native-flock recovery preflight passed, and rendered
+  emergency, backup and log actions were present. Retained private user-file
+  backups and the installer's protected system update backup.
+- The normal installer completed its staged startup/session preflight, old
+  daemon stop/lock release, backed-up replacement, restart and verified allowed
+  status without emergency unlock or a forced service/application restart.
+- Installed Guard and user renderer matched the checked release byte-for-byte.
+  The launcher matched its release artifact and remained root/dedicated-group
+  owned with mode `2755`; its normal-user `--check` passed without launching an
+  application. Guard remained root-owned `0755`, user menu files user-owned
+  `0700`. The existing Gate executable, Gate/Surge process identities, system
+  policy, user configuration and persistent update-mode record were retained.
+- Administrator read-only doctor confirmed fresh ready route conditions, PF
+  enabled, own attachment first, persistent TCP VIF/group/block rules with
+  interface-bound states and the existing private LAN exception. This did not
+  generate a target HTTP request or perform packet-level enforcement testing.
+- In a bounded 30-second observation, all 53 Guard samples were allowed and
+  Gate was fresh/ready throughout. Maximum sampled ages were approximately
+  1.54 seconds for Guard, 5.97 seconds for PF verification and 2.75 seconds for
+  the original route dispatch. New process identity and boot-bound snapshots
+  included the route timestamp; a real allowed transition retained all new
+  dispatch/query/delivery timing fields and generation matching.
+- The existing combined plugin rendered separate native readiness and current
+  route age/check marks. SwiftBar logged successful manual and subsequent
+  approximately 30-second automatic executions. Its background-item registration
+  remained enabled/allowed; no duplicate plugin or login configuration was added.
+  Raw reports, hashes, configuration comparisons and backups remain private.
+
+Not performed: reboot/logout, visual light/dark or submenu-click acceptance,
+emergency unlock/rollback execution, deliberate runtime CLI/main-queue stalls,
+real address-history exhaustion, network/USB/sleep/wake faults, packet capture
+or packet-level/no-bypass acceptance. The first-execution installation timeout
+was identified and corrected; this does not establish the cause or eliminate
+the earlier transient runtime route-expiry incident.
+
+## 2026-11-12 — AWDL link-local IPv6 TCP exception under allow_lan_tcp
+
+Added `AWDLTCP` under the existing `allow_lan_tcp` opt-in (`persistent_tcp`
+enforcement), permitting only interface-bound (`if-bound`) IPv6 TCP between an
+active `awdl0` interface's actual `fe80::/10` local address and `fe80::/10`
+peers in both ready and blocked PF states, while keeping `enN` Wi-Fi/Ethernet
+and public IPv6 restricted.
+
+Performed:
+
+- `scripts/check.sh` passed after the final code edit, including
+  `swift run surge-guard-tests` (covering `AWDLTCP` address filtering, PF
+  syntax validation via `/sbin/pfctl -n -f -`, state-cleanup tracking on
+  address removal/change, and independent `LocalTCPInventory` error isolation),
+  C launcher tests, `-warnings-as-errors` release build, lock checks, CLI/JSON
+  checks, shell checks and `git diff --check`.
+- `.build/release/surge-guard check --json` returned parseable JSON including
+  `"awdl_tcp_bindings":[{"address":"fe80::f401:33ff:feda:1e4b","interface":"awdl0"}]`
+  alongside ready route conditions and USB bindings.
+- Updated user recovery/menu binaries (`scripts/install-user.sh --menu-only`)
+  and the user companion service (`.build/release/surge-gate install`);
+  `.build/release/surge-gate status --json` reported `"fresh":true` on the
+  new process (`pid` 43530).
+
+Not performed: privileged system Guard upgrade (`sudo .build/release/surge-guard install`,
+blocked on interactive `sudo` password prompt), live PF rule inspection via
+`sudo /Library/PrivilegedHelperTools/surge-guard status`, and live iPhone
+Mirroring end-to-end reconnection acceptance after system Guard deployment.

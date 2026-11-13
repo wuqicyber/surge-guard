@@ -51,6 +51,7 @@ enum CLI {
         var session: SessionObservation?
         var reasons: [String]
         var usbTcpBindings: [USBTCPBinding]?
+        var awdlTcpBindings: [USBTCPBinding]?
         var localTcpErrors: [String]?
     }
 
@@ -76,6 +77,7 @@ enum CLI {
         if configuration.allowsLANTCP {
             let inventory = LocalTCPInventory()
             report.usbTcpBindings = inventory.usb
+            report.awdlTcpBindings = inventory.awdl
             report.localTcpErrors = inventory.errors.isEmpty ? nil : inventory.errors
         }
         if configuration.mode == "routes" {

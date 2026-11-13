@@ -128,6 +128,7 @@ public struct PFBlockCounters: Codable, Equatable {
 public final class Firewall {
     public private(set) var lanTCPBindings: [LANTCPBinding] = []
     public private(set) var usbTCPBindings: [USBTCPBinding] = []
+    public private(set) var awdlTCPBindings: [USBTCPBinding] = []
     private var knownAddresses = Set<String>()
     private let historyPath: String?
     private let writeHistory: (String, String) throws -> Void
@@ -202,13 +203,25 @@ public final class Firewall {
 
     @discardableResult
     public func setUSBTCP(_ bindings: [USBTCPBinding]) throws -> Bool {
-        _ = try USBTCP.rules(bindings: bindings)
-        guard bindings != usbTCPBindings else { return false }
-        for binding in usbTCPBindings where !bindings.contains(binding) {
-            let peer = binding.interface.hasPrefix("utun") ? USBTCP.tunnelNetwork(binding.address)! : "fe80::/10"
-            rememberLocalStateCleanup(address: binding.address, peer: peer)
+        try updateIPv6LocalBindings(&usbTCPBindings, to: bindings, validate: USBTCP.rules) {
+            $0.interface.hasPrefix("utun") ? USBTCP.tunnelNetwork($0.address)! : "fe80::/10"
         }
-        usbTCPBindings = bindings
+    }
+
+    @discardableResult
+    public func setAWDLTCP(_ bindings: [USBTCPBinding]) throws -> Bool {
+        try updateIPv6LocalBindings(&awdlTCPBindings, to: bindings, validate: AWDLTCP.rules) { _ in "fe80::/10" }
+    }
+
+    private func updateIPv6LocalBindings(_ current: inout [USBTCPBinding], to bindings: [USBTCPBinding],
+                                         validate: ([USBTCPBinding]) throws -> String,
+                                         peer: (USBTCPBinding) -> String) throws -> Bool {
+        _ = try validate(bindings)
+        guard bindings != current else { return false }
+        for binding in current where !bindings.contains(binding) {
+            rememberLocalStateCleanup(address: binding.address, peer: peer(binding))
+        }
+        current = bindings
         return true
     }
 
@@ -405,7 +418,7 @@ public final class Firewall {
         // Load fail-closed rules before slower integrity checks. If the anchor
         // was detached, ensureEnabled still rejects the transition.
         try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"],
-                            input: Policy.blockedRules(lanTCPBindings: lanTCPBindings, usbTCPBindings: usbTCPBindings), timeout: 5)
+                            input: Policy.blockedRules(lanTCPBindings: lanTCPBindings, usbTCPBindings: usbTCPBindings, awdlTCPBindings: awdlTCPBindings), timeout: 5)
         let rulesLoaded = SystemClock.seconds
         revision += 1
         try ensureEnabled()
@@ -413,6 +426,7 @@ public final class Firewall {
         guard actual.contains("surge-guard-block") else { throw GuardError("Block rule did not load") }
         try verifyLANTCP(actual)
         try verifyUSBTCP(actual)
+        try verifyAWDLTCP(actual)
         // States precede PF rule evaluation. Terminate states involving this
         // Mac, including old interface addresses; never flush all PF state.
         if clearExistingStates {
@@ -439,11 +453,14 @@ public final class Firewall {
     }
 
     public func allow(group: UInt32? = nil, interface: String? = nil) throws {
-        guard group != nil || (lanTCPBindings.isEmpty && usbTCPBindings.isEmpty) else { throw GuardError("Local TCP exceptions require persistent TCP enforcement") }
+        guard group != nil || (lanTCPBindings.isEmpty && usbTCPBindings.isEmpty && awdlTCPBindings.isEmpty) else {
+            throw GuardError("Local TCP exceptions require persistent TCP enforcement")
+        }
         try ensureEnabled()
         if let group {
             guard let interface else { throw GuardError("Persistent TCP policy needs a verified Surge interface") }
-            let rules = try Policy.persistentTCP(group: group, interface: interface, lanTCPBindings: lanTCPBindings, usbTCPBindings: usbTCPBindings)
+            let rules = try Policy.persistentTCP(group: group, interface: interface, lanTCPBindings: lanTCPBindings,
+                                                 usbTCPBindings: usbTCPBindings, awdlTCPBindings: awdlTCPBindings)
             try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-f", "-"], input: rules, timeout: 5)
         } else {
             try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-F", "rules"], timeout: 5)
@@ -458,6 +475,7 @@ public final class Firewall {
             }
             try verifyLANTCP(actual)
             try verifyUSBTCP(actual)
+            try verifyAWDLTCP(actual)
         } else if !actual.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw GuardError("Surge Guard rules were not cleared")
         }
@@ -466,22 +484,28 @@ public final class Firewall {
         blockID = nil
     }
 
-    private func verifyLANTCP(_ rules: String) throws {
+    private func verifyLocalRules(_ rules: String, expectedRules: String, labelPrefix: String, failureMessage: String) throws {
         let actual = Set(rules.split(separator: "\n").map(String.init))
-        let expected = try LANTCP.rules(bindings: lanTCPBindings).split(separator: "\n").map(String.init)
+        let expected = expectedRules.split(separator: "\n").map(String.init)
         guard expected.allSatisfy(actual.contains),
-              actual.filter({ $0.contains("label \"surge-guard-lan-") }).count == expected.count else {
-            throw GuardError("LAN TCP rules were not verified")
+              actual.filter({ $0.contains("label \"\(labelPrefix)") }).count == expected.count else {
+            throw GuardError(failureMessage)
         }
     }
 
+    private func verifyLANTCP(_ rules: String) throws {
+        try verifyLocalRules(rules, expectedRules: try LANTCP.rules(bindings: lanTCPBindings),
+                             labelPrefix: "surge-guard-lan-", failureMessage: "LAN TCP rules were not verified")
+    }
+
     private func verifyUSBTCP(_ rules: String) throws {
-        let actual = Set(rules.split(separator: "\n").map(String.init))
-        let expected = try USBTCP.rules(bindings: usbTCPBindings).split(separator: "\n").map(String.init)
-        guard expected.allSatisfy(actual.contains),
-              actual.filter({ $0.contains("label \"surge-guard-usb-") }).count == expected.count else {
-            throw GuardError("USB TCP rules were not verified")
-        }
+        try verifyLocalRules(rules, expectedRules: try USBTCP.rules(bindings: usbTCPBindings),
+                             labelPrefix: "surge-guard-usb-", failureMessage: "USB TCP rules were not verified")
+    }
+
+    private func verifyAWDLTCP(_ rules: String) throws {
+        try verifyLocalRules(rules, expectedRules: try AWDLTCP.rules(bindings: awdlTCPBindings),
+                             labelPrefix: "surge-guard-awdl-", failureMessage: "AWDL TCP rules were not verified")
     }
 
     public func recordBlockedTraffic(phase: String = "periodic") {

@@ -79,6 +79,8 @@ enum Admin {
         let stagedBinary = Paths.binary + ".new." + UUID().uuidString
         try Command.checked("/usr/bin/install", ["-o", "root", "-g", "wheel", "-m", "755", source, stagedBinary])
         defer { try? FileManager.default.removeItem(atPath: stagedBinary) }
+        // Complete first-execution security scanning before the three-second query budget.
+        _ = try Command.checked(stagedBinary, ["--help"], timeout: 10)
         if upgrading, let config = try? Configuration.load(), config.mode == "routes" {
             // Verify the new privilege-drop/CLI path before stopping the old gate.
             _ = try Probe.privilegedSession(configuration: config, helperPath: stagedBinary)

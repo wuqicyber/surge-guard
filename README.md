@@ -144,6 +144,17 @@ budget. Results still expire three seconds after probe dispatch, including query
 time. Network events discard in-flight results from the previous generation
 while retaining an already completed result only until its original expiry.
 
+`rule_probe_expired` means the last routing result is too old to authorize
+networking. Guard blocks and retries automatically; a matching retained decision
+does not extend its validity. The menu shows native readiness separately from
+route freshness and labels expired or untimed decisions as history. Updated
+status includes optional `session_checked_uptime`, measured from probe dispatch;
+an older daemon without that field cannot provide a current menu check mark.
+Upgrade both Guard and the menu renderer to show route ages. Transition event
+JSON records probe dispatch delay, helper duration, callback delivery delay,
+generation matching and cached-result age when available. These are diagnostic
+timings, not packet-block latency measurements.
+
 The selected group chain must be contiguous, acyclic and end at a recognized
 proxy type. Missing selections, unresolved group types and unknown final types
 fail closed, including when no final-node allowlist is supplied.
@@ -263,7 +274,10 @@ qualify. Rules bind that interface, local address and connection state, and allo
 only `fe80::/10` peers. CoreDevice's second-stage `utunN` tunnel also permits TCP
 between its actual ULA address and its own ULA /64. The bounded system
 `remotectl dumpstate` inventory identifies CoreDevice interfaces; unrelated VPNs
-do not qualify. There is no Wi-Fi or public IPv6 exception. Interface
+do not qualify. The same opt-in also permits link-local IPv6 (`fe80::/10`) TCP
+between an active `awdl0` interface's actual local address and `fe80::/10` peers
+with interface-bound state for Apple peer-to-peer services such as iPhone
+Mirroring. There is no Wi-Fi (`enN`) or public IPv6 exception. Interface
 names are discovered dynamically after reconnecting; enumeration failures revoke
 the exception. Adding a device tunnel preserves its existing USB carrier states;
 removal or other policy changes still block and clear old states. This does not
@@ -358,6 +372,10 @@ independent emergency menu action. An installed but unloaded service starts next
 For a routes-mode update, the staged new helper first verifies user-session CLI
 access before stopping the old daemon. A failed preflight aborts the update;
 keep Surge running during that upgrade. This preflight does not change PF.
+The staged root-owned executable first runs `--help` with a separate bounded
+startup budget so macOS first-execution security scanning does not consume the
+three-second route-query budget. Startup-check failure also leaves the old
+service running; runtime freshness and query deadlines are unchanged.
 
 The PF attachment must be first among filter rules. The installer retains the
 original `/private/etc/pf.conf.surge-guard.backup` and refuses edited managed

@@ -34,11 +34,13 @@ public struct GuardSnapshot: Codable {
     public var configurationMode: String
     public var readiness: Readiness?
     public var session: SessionObservation?
+    public var sessionCheckedUptime: Double?
     public var reasons: [String]
     public var enforcement = "surge_readiness_gate"
     public var lanTcpEnabled: Bool?
     public var lanTcpBindings: [LANTCPBinding]?
     public var usbTcpBindings: [USBTCPBinding]?
+    public var awdlTcpBindings: [USBTCPBinding]?
     public var localTcpErrors: [String]?
     public var capabilities: [String]? = ["os_update_v1"]
     public var systemUpdateId: UUID?
@@ -46,7 +48,8 @@ public struct GuardSnapshot: Codable {
     public init(runId: String, firewallVerifiedUptime: Double, allowed: Bool, configurationMode: String,
                 readiness: Readiness?, session: SessionObservation?, reasons: [String],
                 enforcement: String = "surge_readiness_gate", lanTcpEnabled: Bool? = nil, lanTcpBindings: [LANTCPBinding]? = nil,
-                systemUpdateId: UUID? = nil, usbTcpBindings: [USBTCPBinding]? = nil, localTcpErrors: [String]? = nil) {
+                systemUpdateId: UUID? = nil, usbTcpBindings: [USBTCPBinding]? = nil, localTcpErrors: [String]? = nil,
+                sessionCheckedUptime: Double? = nil, awdlTcpBindings: [USBTCPBinding]? = nil) {
         bootId = SystemClock.bootID
         self.runId = runId
         pid = getpid()
@@ -57,6 +60,7 @@ public struct GuardSnapshot: Codable {
         self.configurationMode = configurationMode
         self.readiness = readiness
         self.session = session
+        self.sessionCheckedUptime = sessionCheckedUptime
         self.reasons = reasons
         self.enforcement = enforcement
         // Old readers must reject maintenance instead of reporting its empty rules as blocked.
@@ -65,6 +69,7 @@ public struct GuardSnapshot: Codable {
         self.lanTcpBindings = lanTcpBindings
         self.systemUpdateId = systemUpdateId
         self.usbTcpBindings = usbTcpBindings
+        self.awdlTcpBindings = awdlTcpBindings
         self.localTcpErrors = localTcpErrors
     }
 
@@ -72,6 +77,12 @@ public struct GuardSnapshot: Codable {
         !boot.isEmpty && version == (enforcement == "os_update_maintenance" ? 2 : 1) &&
             bootId == boot && checkedUptime <= now && now - checkedUptime < 8 &&
             firewallVerifiedUptime <= now && now - firewallVerifiedUptime < 8
+    }
+
+    public func sessionFresh(now: Double = SystemClock.seconds) -> Bool {
+        guard session != nil, let started = sessionCheckedUptime,
+              started.isFinite, started >= 0, now >= started, now - started < 3 else { return false }
+        return !reasons.contains(where: { $0.hasPrefix("rule_probe_") })
     }
 }
 

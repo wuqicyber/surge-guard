@@ -35,6 +35,7 @@ final class Daemon {
     var generation = 0
     var nextPublish: Double = 0
     var lastProbeError = ""
+    var lastSessionProbeDetails: [String: Any] = [:]
     var lastRoutes = ""
     var egressSampling = false
     var nextEgressSample: Double = 0
@@ -119,10 +120,19 @@ final class Daemon {
         let requestedGeneration = generation
         let started = now
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            let queryStarted = SystemClock.seconds
             let result = Result { try Probe.privilegedSession(configuration: config) }
+            let completed = SystemClock.seconds
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.probing = false
+                let delivered = SystemClock.seconds
+                self.lastSessionProbeDetails = ["dispatched_uptime": started, "query_started_uptime": queryStarted,
+                                               "query_completed_uptime": completed, "delivered_uptime": delivered,
+                                               "dispatch_delay_ms": max(0, (queryStarted - started) * 1000),
+                                               "query_duration_ms": max(0, (completed - queryStarted) * 1000),
+                                               "delivery_delay_ms": max(0, (delivered - completed) * 1000),
+                                               "generation_matched": self.generation == requestedGeneration]
                 guard self.generation == requestedGeneration else { return }
                 self.sessionChecked = started
                 switch result {
@@ -267,7 +277,8 @@ final class Daemon {
                                              configurationMode: configuration?.mode ?? "invalid", readiness: nil,
                                              session: nil, reasons: [loss], enforcement: configuration?.enforcement ?? "surge_readiness_gate",
                                              lanTcpEnabled: configuration?.allowsLANTCP, lanTcpBindings: firewall.lanTCPBindings,
-                                             systemUpdateId: systemUpdate?.id, usbTcpBindings: firewall.usbTCPBindings)
+                                             systemUpdateId: systemUpdate?.id, usbTcpBindings: firewall.usbTCPBindings,
+                                             awdlTcpBindings: firewall.awdlTCPBindings)
                 try RootFiles.write(try JSON.encode(snapshot), to: Paths.snapshot, mode: 0o644)
                 EventLog.write("readiness_loss_blocked", level: "warning", message: loss,
                                details: ["run_id": runID, "detected_uptime": received, "pf": "blocked",
@@ -309,11 +320,13 @@ final class Daemon {
                 let inventory = config!.allowsLANTCP ? LocalTCPInventory() : nil
                 let bindings = inventory?.lan ?? []
                 let usbBindings = inventory?.usb ?? []
+                let awdlBindings = inventory?.awdl ?? []
                 localTCPFailures = inventory?.errors ?? []
                 let lanChanged = try firewall.setLANTCP(bindings)
                 let usbChanged = try firewall.setUSBTCP(usbBindings)
-                localBindingsChanged = lanChanged || usbChanged
-                if configuration != config || lanChanged || usbChanged {
+                let awdlChanged = try firewall.setAWDLTCP(awdlBindings)
+                localBindingsChanged = lanChanged || usbChanged || awdlChanged
+                if configuration != config || lanChanged || usbChanged || awdlChanged {
                     if configuration != config {
                         if allowed || localBindingsChanged { try firewall.block(); allowed = false; firewallVerified = SystemClock.seconds }
                         invalidateSession()
@@ -326,12 +339,14 @@ final class Daemon {
                     EventLog.write("configuration_loaded", message: "Validated policy configuration and local TCP interfaces",
                                    details: ["mode": config!.mode, "run_id": runID, "allow_lan_tcp": config!.allowsLANTCP,
                                              "lan_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(bindings).utf8)),
-                                             "usb_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(usbBindings).utf8))])
+                                             "usb_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(usbBindings).utf8)),
+                                             "awdl_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(awdlBindings).utf8))])
                 }
             } catch {
                 let lanRevoked = try firewall.setLANTCP([])
                 let usbRevoked = try firewall.setUSBTCP([])
-                if lanRevoked || usbRevoked {
+                let awdlRevoked = try firewall.setAWDLTCP([])
+                if lanRevoked || usbRevoked || awdlRevoked {
                     try firewall.block()
                     allowed = false
                     firewallVerified = SystemClock.seconds
@@ -416,13 +431,21 @@ final class Daemon {
                                              enforcement: config?.enforcement ?? "surge_readiness_gate",
                                              lanTcpEnabled: config?.allowsLANTCP, lanTcpBindings: firewall.lanTCPBindings,
                                              systemUpdateId: systemUpdate?.id, usbTcpBindings: firewall.usbTCPBindings,
-                                             localTcpErrors: localTCPFailures.isEmpty ? nil : localTCPFailures)
+                                             localTcpErrors: localTCPFailures.isEmpty ? nil : localTCPFailures,
+                                             sessionCheckedUptime: session == nil ? nil : sessionChecked,
+                                             awdlTcpBindings: firewall.awdlTCPBindings)
                 try RootFiles.write(try JSON.encode(snapshot), to: Paths.snapshot, mode: 0o644)
                 nextPublish = SystemClock.seconds + 1
             }
             if reason != lastReason {
                 var details: [String: Any] = ["run_id": runID, "mode": config?.mode ?? "invalid", "pf": ready ? "allowed" : "blocked",
                                               "allow_lan_tcp": config?.allowsLANTCP ?? false]
+                if config?.mode == "routes" {
+                    var probe = lastSessionProbeDetails
+                    probe["in_flight"] = probing
+                    if session != nil { probe["cached_result_age_ms"] = max(0, (SystemClock.seconds - sessionChecked) * 1000) }
+                    details["rule_probe"] = probe
+                }
                 if !ready, let detected = surgeExitDetectedAt {
                     details["surge_exit_event_uptime"] = detected
                     details["block_verified_uptime"] = firewallVerified

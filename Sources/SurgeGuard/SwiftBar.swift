@@ -53,6 +53,9 @@ enum SwiftBar {
                 let usb = (snapshot.usbTcpBindings ?? []).map { "\($0.interface):\($0.address)" }.joined(separator: ", ")
                 lines.append("-- Apple USB／开发隧道 TCP 例外：\(current ? "" : "历史记录，")\(usb.isEmpty ? "暂无匹配网卡" : clean(usb))" + noteStyle)
                 lines.append("-- 范围：NCM 链路本地 IPv6、CoreDevice 隧道本地 ULA /64；仅 TCP" + noteStyle)
+                let awdl = (snapshot.awdlTcpBindings ?? []).map { "\($0.interface):\($0.address)" }.joined(separator: ", ")
+                lines.append("-- Apple AWDL TCP 例外：\(current ? "" : "历史记录，")\(awdl.isEmpty ? "暂无匹配网卡" : clean(awdl))" + noteStyle)
+                lines.append("-- 范围：awdl0 链路本地 IPv6（fe80::/10）；仅 TCP" + noteStyle)
             }
             let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
             let age = SystemClock.elapsedSeconds(since: snapshot.checkedUptime, now: SystemClock.seconds)
@@ -60,10 +63,16 @@ enum SwiftBar {
             let pfAge = SystemClock.elapsedSeconds(since: snapshot.firewallVerifiedUptime, now: SystemClock.seconds)
                 .map { $0 == 0 ? "不到 1 秒前" : "\($0) 秒前" } ?? "时间无效"
             let readyText = current ? (snapshot.readiness?.ready == true ? "就绪" : "未就绪") : "历史结果，待重新验证"
-            lines.append("-- 检查：\(readyText) · PF 校验：\(pfAge)（发布于 \(formatter.string(from: snapshot.checkedAt))，\(age)）" + infoStyle)
+            lines.append("-- 接管检查：\(readyText) · PF 校验：\(pfAge)（发布于 \(formatter.string(from: snapshot.checkedAt))，\(age)）" + infoStyle)
+            let routesCurrent = current && snapshot.sessionFresh()
+            if snapshot.configurationMode == "routes" {
+                let routeAge = snapshot.sessionCheckedUptime.flatMap { SystemClock.elapsedSeconds(since: $0, now: SystemClock.seconds) }
+                    .map { $0 == 0 ? "不到 1 秒" : "\($0) 秒" } ?? "未知"
+                lines.append("-- 分流验证：\(routesCurrent ? "有效" : "等待重新验证") · 结果年龄：\(routeAge)（有效期 3 秒，含查询耗时）" + noteStyle)
+            }
             for route in snapshot.session?.routes ?? [] {
-                let rMark = current ? (route.ready ? "✓" : "✗") : "?"
-                lines.append("-- 分流\(current ? "规则" : "历史记录") [\(rMark)]：\(clean(route.url)) → \(clean(route.finalPolicy ?? "未知"))" + infoStyle)
+                let rMark = routesCurrent ? (route.ready ? "✓" : "✗") : "?"
+                lines.append("-- 分流\(routesCurrent ? "规则" : "历史记录") [\(rMark)]：\(clean(route.url)) → \(clean(route.finalPolicy ?? "未知"))" + infoStyle)
             }
             if snapshot.configurationMode == "routes" { lines.append("-- 说明：只查询规则策略，不向目标发起网络请求" + noteStyle) }
             for error in snapshot.localTcpErrors ?? [] {
@@ -73,7 +82,8 @@ enum SwiftBar {
         if !modern, status.daemonRunning {
             lines.append("-- 旧版守护正在运行，PF 状态尚未验证 | color=#92400E,#FCD34D size=12")
         } else if !status.reason.isEmpty {
-            lines.append("-- 原因：\(clean(status.reason)) | color=#B91C1C,#FF6961 size=12")
+            let reason = status.reason == "rule_probe_expired" ? "分流验证已过期，保持阻断并自动重试（rule_probe_expired）" : status.reason
+            lines.append("-- 原因：\(clean(reason)) | color=#B91C1C,#FF6961 size=12")
         }
         let actionHelper = CLI.userDirectory.appendingPathComponent("bin/surge-guard-action").path
         let renderer = CLI.userDirectory.appendingPathComponent("bin/surge-guard-ui").path

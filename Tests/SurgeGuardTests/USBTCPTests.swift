@@ -71,5 +71,40 @@ func usbTCPTests() throws {
               "macOS rejected CoreDevice tunnel PF syntax")
     try rejects { _ = try USBTCP.rules(bindings: [USBTCPBinding(interface: "en11", address: tunnel.address)]) }
     try rejects { _ = try USBTCP.rules(bindings: [USBTCPBinding(interface: "utun12", address: address)]) }
-    print("PASS: USB TCP is limited to active Apple NCM link-local IPv6, revokes on unplug, and preserves existing PF rules")
+
+    let awdl = USBTCPBinding(interface: "awdl0", address: address)
+    let awdlAddresses = [InterfaceAddress(name: "awdl0", address: address, up: true, loopback: false),
+                         InterfaceAddress(name: "awdl0", address: "2001:4860::1", up: true, loopback: false),
+                         InterfaceAddress(name: "awdl0", address: "169.254.1.1", up: true, loopback: false),
+                         InterfaceAddress(name: "awdl0", address: "fe80::5678", up: false, loopback: false),
+                         InterfaceAddress(name: "awdl0", address: "fe80::9999", up: true, loopback: true),
+                         InterfaceAddress(name: "llw0", address: address, up: true, loopback: false),
+                         InterfaceAddress(name: "en0", address: address, up: true, loopback: false)]
+    try check(try AWDLTCP.bindings(addresses: awdlAddresses + awdlAddresses) == [awdl],
+              "AWDL inventory accepted down, loopback, non-link-local or non-awdl0 addresses")
+    let awdlRules = try AWDLTCP.rules(bindings: [awdl])
+    try check(awdlRules.split(separator: "\n").count == 2 && awdlRules.contains("from fe80::/10 to \(address)") &&
+              awdlRules.contains("from \(address) to fe80::/10") && awdlRules.split(separator: "\n").allSatisfy {
+                  $0.contains("quick on awdl0 inet6 proto tcp") && $0.contains("keep state (if-bound)") &&
+                      $0.contains("surge-guard-awdl-") && !$0.contains("any")
+              }, "AWDL rules widened interface, protocol, address or state scope")
+    for bad in [USBTCPBinding(interface: "llw0", address: address),
+                USBTCPBinding(interface: "en0", address: address),
+                USBTCPBinding(interface: "awdl0", address: "2001:4860::1"),
+                USBTCPBinding(interface: "awdl0\npass all", address: address)] {
+        try rejects { _ = try AWDLTCP.rules(bindings: [bad]) }
+    }
+    try check(try Policy.blockedRules(awdlTCPBindings: [awdl]) == awdlRules + Policy.blocked &&
+              Policy.persistentTCP(group: 60000, interface: "utun42", awdlTCPBindings: [awdl]) ==
+              awdlRules + Policy.persistentTCP(group: 60000, interface: "utun42"), "AWDL rules displaced existing restrictions")
+    try check(try firewall.setAWDLTCP([awdl]) && !firewall.setAWDLTCP([awdl]) &&
+              firewall.setAWDLTCP([]) && firewall.awdlTCPBindings.isEmpty, "AWDL address removal/change was not tracked")
+    let awdlSnapshot = GuardSnapshot(runId: "awdl-test", firewallVerifiedUptime: SystemClock.seconds, allowed: true,
+                                     configurationMode: "routes", readiness: nil, session: nil, reasons: [], awdlTcpBindings: [awdl])
+    let awdlJSON = try JSON.encode(awdlSnapshot)
+    try check(try JSON.decode(GuardSnapshot.self, from: Data(awdlJSON.utf8)).awdlTcpBindings == [awdl] &&
+              awdlJSON.contains("\"awdl_tcp_bindings\""), "AWDL scope missing from status JSON")
+    try check(try Command.run("/sbin/pfctl", ["-n", "-f", "-"], input: awdlRules + Policy.blocked).status == 0,
+              "macOS rejected AWDL IPv6 PF syntax")
+    print("PASS: USB and AWDL TCP are limited to active local IPv6 bindings, revoke on removal, and preserve existing PF rules")
 }
