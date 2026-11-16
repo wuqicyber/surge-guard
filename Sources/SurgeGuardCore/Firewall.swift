@@ -238,7 +238,7 @@ public final class Firewall {
     }
 
     public func attached() throws -> Bool {
-        Policy.attachedFirst(try Command.checked("/sbin/pfctl", ["-sr"]))
+        Policy.attachedFirst(try Command.checked("/sbin/pfctl", ["-sr"], timeout: 5))
     }
 
     public func prepareAttachment() throws {
@@ -329,12 +329,12 @@ public final class Firewall {
     }
 
     public func enabled() throws -> Bool {
-        try Command.checked("/sbin/pfctl", ["-s", "info"]).contains("Status: Enabled")
+        try Command.checked("/sbin/pfctl", ["-s", "info"], timeout: 5).contains("Status: Enabled")
     }
 
     public func ensureEnabled() throws {
         try requireAttachment()
-        let references = try Command.checked("/sbin/pfctl", ["-s", "References"])
+        let references = try Command.checked("/sbin/pfctl", ["-s", "References"], timeout: 5)
         var ownsReference = false
         if FileManager.default.fileExists(atPath: tokenPath) {
             try RootFiles.verify(tokenPath)
@@ -384,7 +384,7 @@ public final class Firewall {
     }
 
     public func readRules() throws -> String {
-        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-sr"])
+        try Command.checked("/sbin/pfctl", ["-a", Policy.anchor, "-sr"], timeout: 5)
     }
 
     public func unchanged() throws -> Bool {
@@ -552,7 +552,7 @@ public final class Firewall {
             try RootFiles.verify(tokenPath)
             let token = try String(contentsOfFile: tokenPath).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty, token.allSatisfy(\.isNumber) else { throw GuardError("Invalid PF reference file") }
-            let references = try Command.checked("/sbin/pfctl", ["-s", "References"])
+            let references = try Command.checked("/sbin/pfctl", ["-s", "References"], timeout: 5)
             if references.split(whereSeparator: { !$0.isNumber }).contains(Substring(token)) {
                 try Command.checked("/sbin/pfctl", ["-X", token], timeout: 5)
             }

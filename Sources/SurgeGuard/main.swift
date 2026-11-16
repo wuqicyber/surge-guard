@@ -22,16 +22,21 @@ final class Daemon {
     var providerExitSource: DispatchSourceProcess?
     var providerWatchGeneration = 0
     var surgeTrust = SurgeProcessTrust()
+    var kernelTrust = SurgeProcessTrust()
     var surgeWatchGeneration = 0
     var nextFirewallAudit: Double = 0
     let runID = UUID().uuidString
     var firewallVerified: Double = 0
+    var policyCache = ConfigurationCache()
     var configuration: Configuration?
     var session: SessionObservation?
     var sessionChecked: Double = 0
     var nextSessionProbe: Double = 0
     var sessionFailure = "rule_probe_pending"
-    var probing = false
+    var inFlightProbes = 0
+    var lastProbeDispatched: Double = 0
+    var latestAcceptedProbeDispatch: Double = 0
+    var lastProbeTimedOut = false
     var generation = 0
     var nextPublish: Double = 0
     var lastProbeError = ""
@@ -44,6 +49,9 @@ final class Daemon {
     var egressFailure = ""
     var systemUpdate: SystemUpdate?
     var lastLocalTCPFailure = ""
+    var lastLocalInventoryAddresses: [InterfaceAddress]?
+    var lastLocalInventory: LocalTCPInventory?
+    var nextLocalInventoryAudit: Double = 0
 
     init() throws {
         lock = try RuntimeLock()
@@ -102,30 +110,40 @@ final class Daemon {
         return true
     }
 
-    func invalidateSession() {
+    func bumpGeneration() {
         generation += 1
+        latestAcceptedProbeDispatch = 0
+    }
+
+    func invalidateSession() {
+        bumpGeneration()
         session = nil
         sessionChecked = 0
         nextSessionProbe = 0
+        lastProbeDispatched = 0
+        lastProbeTimedOut = false
         sessionFailure = "rule_probe_pending"
     }
 
     func updateSession(_ config: Configuration, force: Bool) {
         let now = SystemClock.seconds
         // Refresh immediately without discarding a still-fresh result; real losses invalidate separately.
-        if force { generation += 1; nextSessionProbe = 0 }
-        guard !probing, now >= nextSessionProbe else { return }
-        probing = true
+        if force { bumpGeneration(); nextSessionProbe = 0 }
+        let canOverlap = inFlightProbes == 1 && !lastProbeTimedOut && now >= lastProbeDispatched + 1.2 &&
+            (force || (session != nil && now >= nextSessionProbe))
+        guard (inFlightProbes == 0 && now >= nextSessionProbe) || canOverlap else { return }
+        inFlightProbes += 1
+        lastProbeDispatched = now
         nextSessionProbe = now + 1
         let requestedGeneration = generation
         let started = now
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let queryStarted = SystemClock.seconds
             let result = Result { try Probe.privilegedSession(configuration: config) }
             let completed = SystemClock.seconds
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.probing = false
+                self.inFlightProbes -= 1
                 let delivered = SystemClock.seconds
                 self.lastSessionProbeDetails = ["dispatched_uptime": started, "query_started_uptime": queryStarted,
                                                "query_completed_uptime": completed, "delivered_uptime": delivered,
@@ -133,10 +151,12 @@ final class Daemon {
                                                "query_duration_ms": max(0, (completed - queryStarted) * 1000),
                                                "delivery_delay_ms": max(0, (delivered - completed) * 1000),
                                                "generation_matched": self.generation == requestedGeneration]
-                guard self.generation == requestedGeneration else { return }
+                guard self.generation == requestedGeneration, started >= self.latestAcceptedProbeDispatch else { return }
+                self.latestAcceptedProbeDispatch = started
                 self.sessionChecked = started
                 switch result {
                 case .success(let observation):
+                    self.lastProbeTimedOut = false
                     let bound = observation.routes.count == config.routeChecks.count && zip(observation.routes, config.routeChecks).allSatisfy {
                         $0.url == $1.url && $0.expectedGroup == $1.requiredGroup &&
                             (!$0.ready || ($0.actualGroup == $1.requiredGroup && $1.allowsFinalPolicy($0.finalPolicy)))
@@ -144,8 +164,12 @@ final class Daemon {
                     self.session = bound ? observation : nil
                     self.sessionFailure = bound ? "" : "rule_probe_configuration_changed"
                 case .failure(let error):
+                    let message = String(describing: error)
+                    let timedOut = message.contains("timed out")
+                    self.lastProbeTimedOut = timedOut
+                    self.nextSessionProbe = timedOut ? max(self.nextSessionProbe, delivered + 0.5) : min(self.nextSessionProbe, delivered + 0.35)
                     self.session = nil
-                    self.sessionFailure = "rule_probe_failed: \(error)"
+                    self.sessionFailure = "rule_probe_failed: \(message)"
                 }
                 if self.session == nil && self.sessionFailure != self.lastProbeError {
                     EventLog.write("rule_probe_failed", level: "warning", message: self.sessionFailure,
@@ -170,7 +194,7 @@ final class Daemon {
         }) ?? [:]
         guard let service = primary["PrimaryService"] as? String,
               let interface = primary["PrimaryInterface"] as? String,
-              let connection = try Probe.serviceConnection(service, interface: interface, store: store) else {
+              let connection = try Probe.serviceConnection(service, interface: interface, store: store, kernelTrust: &kernelTrust) else {
             try clearConfiguredTunnelWatch()
             clearKernelTunnelWatch()
             return "primary network service is not Surge"
@@ -288,7 +312,8 @@ final class Daemon {
                                          "event_to_rules_loaded_ms": max(0, (timing.rulesLoadedUptime - received) * 1000),
                                          "event_to_block_verified_ms": max(0, (timing.statesClearedUptime - received) * 1000)])
             }
-            try firewall.rememberAddresses()
+            let currentAddresses = try Probe.addresses()
+            try firewall.rememberAddresses(addresses: { Set(currentAddresses.filter { !$0.loopback }.map(\.address)) })
             if firewall.addressHistoryNeedsCompaction {
                 let timing = try firewall.block()
                 allowed = false
@@ -299,7 +324,13 @@ final class Daemon {
             let now = SystemClock.seconds
             if forceFirewallAudit || now >= nextFirewallAudit {
                 nextFirewallAudit = now + 5
-                if try !firewall.unchanged() {
+                let auditMatches: Bool
+                do { auditMatches = try firewall.unchanged() }
+                catch {
+                    auditMatches = false
+                    EventLog.write("pf_audit_failed", level: "warning", message: "PF audit failed (\(error)); blocking before continuing", details: ["run_id": runID])
+                }
+                if !auditMatches {
                     allowed = false
                     try firewall.block()
                     EventLog.write("pf_reconciled", level: "warning", message: "Blocking before rechecking Surge", details: ["run_id": runID])
@@ -308,7 +339,7 @@ final class Daemon {
             }
             var observation: Readiness?
             var probeFailure: String?
-            do { observation = try Probe.readiness(trustedProcess: surgeProcessTrusted()) }
+            do { observation = try Probe.readiness(trustedProcess: surgeProcessTrusted(), store: store, addresses: currentAddresses, kernelTrust: &kernelTrust) }
             catch { observation = nil; probeFailure = String(describing: error) }
             var reasons = observation?.reasons ?? ["readiness_probe_failed: \(probeFailure ?? "unknown error")"]
             if let loss, !reasons.contains(loss) { reasons.append(loss) }
@@ -316,8 +347,25 @@ final class Daemon {
             var localBindingsChanged = false
             var localTCPFailures: [String] = []
             do {
-                config = try Configuration.load()
-                let inventory = config!.allowsLANTCP ? LocalTCPInventory() : nil
+                let loadedConfig = try policyCache.load()
+                config = loadedConfig
+                let inventory: LocalTCPInventory?
+                if loadedConfig.allowsLANTCP {
+                    let refreshInventory = forceFirewallAudit || lastLocalInventory == nil ||
+                        lastLocalInventoryAddresses != currentAddresses ||
+                        SystemClock.seconds >= nextLocalInventoryAudit
+                    if refreshInventory {
+                        lastLocalInventory = LocalTCPInventory(addresses: { currentAddresses })
+                        lastLocalInventoryAddresses = currentAddresses
+                        nextLocalInventoryAudit = SystemClock.seconds + 5
+                    }
+                    inventory = lastLocalInventory
+                } else {
+                    lastLocalInventory = nil
+                    lastLocalInventoryAddresses = nil
+                    nextLocalInventoryAudit = 0
+                    inventory = nil
+                }
                 let bindings = inventory?.lan ?? []
                 let usbBindings = inventory?.usb ?? []
                 let awdlBindings = inventory?.awdl ?? []
@@ -326,8 +374,8 @@ final class Daemon {
                 let usbChanged = try firewall.setUSBTCP(usbBindings)
                 let awdlChanged = try firewall.setAWDLTCP(awdlBindings)
                 localBindingsChanged = lanChanged || usbChanged || awdlChanged
-                if configuration != config || lanChanged || usbChanged || awdlChanged {
-                    if configuration != config {
+                if configuration != loadedConfig || lanChanged || usbChanged || awdlChanged {
+                    if configuration != loadedConfig {
                         if allowed || localBindingsChanged { try firewall.block(); allowed = false; firewallVerified = SystemClock.seconds }
                         invalidateSession()
                     } else if !allowed {
@@ -335,14 +383,17 @@ final class Daemon {
                         try firewall.block(clearExistingStates: false)
                         firewallVerified = SystemClock.seconds
                     }
-                    configuration = config
+                    configuration = loadedConfig
                     EventLog.write("configuration_loaded", message: "Validated policy configuration and local TCP interfaces",
-                                   details: ["mode": config!.mode, "run_id": runID, "allow_lan_tcp": config!.allowsLANTCP,
+                                   details: ["mode": loadedConfig.mode, "run_id": runID, "allow_lan_tcp": loadedConfig.allowsLANTCP,
                                              "lan_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(bindings).utf8)),
                                              "usb_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(usbBindings).utf8)),
                                              "awdl_tcp_bindings": try JSONSerialization.jsonObject(with: Data(JSON.encode(awdlBindings).utf8))])
                 }
             } catch {
+                lastLocalInventory = nil
+                lastLocalInventoryAddresses = nil
+                nextLocalInventoryAudit = 0
                 let lanRevoked = try firewall.setLANTCP([])
                 let usbRevoked = try firewall.setUSBTCP([])
                 let awdlRevoked = try firewall.setAWDLTCP([])
@@ -354,7 +405,7 @@ final class Daemon {
                 reasons.append("configuration_invalid: \(error)")
                 config = nil
                 configuration = nil
-                generation += 1
+                bumpGeneration()
                 session = nil
             }
             let localFailure = localTCPFailures.joined(separator: "; ")
@@ -374,7 +425,7 @@ final class Daemon {
                           try DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: egressGroup!) else {
                         throw GuardError("surge_egress_identity_mismatch")
                     }
-                    surgeInterface = try Probe.surgeInterface()
+                    surgeInterface = try Probe.surgeInterface(store: store, addresses: currentAddresses, kernelTrust: &kernelTrust)
                     if allowed, allowedInterface != surgeInterface {
                         try firewall.block()
                         allowed = false
@@ -384,7 +435,7 @@ final class Daemon {
             }
             if config?.mode == "routes" {
                 if observation?.ready == true, let config { updateSession(config, force: forceFirewallAudit) }
-                else { generation += 1; session = nil; sessionChecked = 0 }
+                else { bumpGeneration(); session = nil; sessionChecked = 0 }
                 if SystemClock.seconds - sessionChecked >= 3 || session == nil {
                     reasons.append(sessionFailure.isEmpty ? "rule_probe_expired" : sessionFailure)
                 } else if let session {
@@ -398,7 +449,7 @@ final class Daemon {
                 firewall.recordBlockedTraffic(phase: "before_allow")
                 // Optional evidence collection must not reopen using stale readiness or route results.
                 do {
-                    observation = try Probe.readiness(trustedProcess: surgeProcessTrusted())
+                    observation = try Probe.readiness(trustedProcess: surgeProcessTrusted(), store: store, kernelTrust: &kernelTrust)
                     reasons.append(contentsOf: observation?.reasons ?? [])
                     if let loss = try watchSurgeConnection(), !reasons.contains(loss) { reasons.append(loss) }
                 } catch { reasons.append("readiness_probe_failed: \(error)") }
@@ -408,7 +459,7 @@ final class Daemon {
                         guard let group = egressGroup, let pid = trustedSurgePID,
                               try DedicatedEgress.group() == group,
                               try DedicatedEgress.identityMatches(pid: pid, uid: Probe.consoleUID(), group: group),
-                              try Probe.surgeInterface() == surgeInterface else {
+                              try Probe.surgeInterface(store: store, kernelTrust: &kernelTrust) == surgeInterface else {
                             throw GuardError("Surge identity/interface changed before allowing TCP")
                         }
                     } catch { reasons.append("persistent_tcp_not_ready: \(error)") }
@@ -442,7 +493,8 @@ final class Daemon {
                                               "allow_lan_tcp": config?.allowsLANTCP ?? false]
                 if config?.mode == "routes" {
                     var probe = lastSessionProbeDetails
-                    probe["in_flight"] = probing
+                    probe["in_flight"] = inFlightProbes > 0
+                    probe["in_flight_count"] = inFlightProbes
                     if session != nil { probe["cached_result_age_ms"] = max(0, (SystemClock.seconds - sessionChecked) * 1000) }
                     details["rule_probe"] = probe
                 }
@@ -594,10 +646,14 @@ final class Daemon {
     }
 }
 
+let arguments = Array(CommandLine.arguments.dropFirst())
+let internalProbe = ["session-probe", "os-update-gate-probe", "audit-request-probe"].contains(arguments.first ?? "")
 do {
-    try CLI.run(Array(CommandLine.arguments.dropFirst()))
+    try CLI.run(arguments)
 } catch {
-    EventLog.write("command_failed", level: "error", message: String(describing: error))
+    if !internalProbe {
+        EventLog.write("command_failed", level: "error", message: String(describing: error))
+    }
     if CommandLine.arguments.contains("--json") {
         struct Failure: Encodable { let ready = false; let error: String }
         print((try? JSON.encode(Failure(error: String(describing: error)))) ?? "{}")

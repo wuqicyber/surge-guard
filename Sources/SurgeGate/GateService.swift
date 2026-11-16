@@ -32,6 +32,11 @@ var workspaceLaunches = Set<UUID>()
 let gateRunID = UUID()
 
 func pendingLaunchState() throws -> (request: GatePendingLaunch, disposition: GatePendingLaunch.Disposition)? {
+    var trust = SurgeProcessTrust()
+    return try pendingLaunchState(trust: &trust)
+}
+
+func pendingLaunchState(trust: inout SurgeProcessTrust) throws -> (request: GatePendingLaunch, disposition: GatePendingLaunch.Disposition)? {
     guard var request = try GatePendingLaunch.load() else { return nil }
     if workspaceLaunches.contains(request.id) { return (request, .inFlight) }
     if request.launchd == true {
@@ -45,7 +50,7 @@ func pendingLaunchState() throws -> (request: GatePendingLaunch, disposition: Ga
             try observeSurgeJob(request, child: child)
         }
         let child = try request.child.flatMap { try SurgeProcess.read(pid: $0.pid) }
-        let identity = surgeIdentity()
+        let identity = surgeIdentity(trust: &trust)
         let verified = identity.satisfiesPolicy && identity.pid == child?.pid ? child : nil
         if let verified { surgeExitObserver?.verifiedStartup(matching: verified) }
         let submissionRunning: Bool?
@@ -59,7 +64,7 @@ func pendingLaunchState() throws -> (request: GatePendingLaunch, disposition: Ga
     }
     let appRunning: Bool
     if request.app == "com.nssurge.surge-mac" {
-        let identity = surgeIdentity()
+        let identity = surgeIdentity(trust: &trust)
         appRunning = identity.satisfiesPolicy
     } else {
         appRunning = NSRunningApplication.runningApplications(withBundleIdentifier: request.app).contains(where: { !$0.isTerminated })
@@ -134,10 +139,15 @@ func requestSurgeQuit(_ app: NSRunningApplication, reason: String) -> Bool {
 }
 
 func surgeIdentity() -> GateSurgeIdentity {
+    var trust = SurgeProcessTrust()
+    return surgeIdentity(trust: &trust)
+}
+
+func surgeIdentity(trust: inout SurgeProcessTrust) -> GateSurgeIdentity {
     var result = GateSurgeIdentity()
     do {
         let policy = try Configuration.load()
-        result.pid = try Probe.trustedSurgePID()
+        result.pid = try Probe.trustedSurgePID(using: &trust)
         guard let pid = result.pid else { result.reason = "Surge absent, untrusted or multiple instances"; return result }
         if policy.usesPersistentTCP {
             let group = try DedicatedEgress.group()
@@ -149,7 +159,7 @@ func surgeIdentity() -> GateSurgeIdentity {
     return result
 }
 
-func ensureSurge(quitTimeout: Double) throws -> SurgeLaunchResult {
+func ensureSurge(quitTimeout: Double, trust: inout SurgeProcessTrust) throws -> SurgeLaunchResult {
     if try SystemUpdate.load() != nil { return .updatePaused }
     if try GateUpdate.load()?.paused == true { return .updatePaused }
     let policy = try Configuration.load()
@@ -160,7 +170,7 @@ func ensureSurge(quitTimeout: Double) throws -> SurgeLaunchResult {
     }
     let group = try DedicatedEgress.group()
     let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.nssurge.surge-mac").filter { !$0.isTerminated }
-    if let pid = try Probe.trustedSurgePID(), (apps.isEmpty || (apps.count == 1 && apps[0].processIdentifier == pid)),
+    if let pid = try Probe.trustedSurgePID(using: &trust), (apps.isEmpty || (apps.count == 1 && apps[0].processIdentifier == pid)),
        try DedicatedEgress.identityMatches(pid: pid, uid: getuid(), group: group) { return .unchanged }
     if !apps.isEmpty {
         guard StatusReport.read().state == "blocked" else {
@@ -201,7 +211,7 @@ func ensureSurge(quitTimeout: Double) throws -> SurgeLaunchResult {
                     "submission_pid": task.processIdentifier, "submission_birth_time_available": request.submission != nil])
     let deadline = SystemClock.seconds + 10
     while SystemClock.seconds < deadline {
-        if let state = try pendingLaunchState() {
+        if let state = try pendingLaunchState(trust: &trust) {
             if state.disposition == .settled { try state.request.complete(); return .launched }
             if state.disposition == .failed {
                 try state.request.complete()
@@ -348,6 +358,7 @@ func run() throws {
     var shutdownPhase = GateShutdownPhase.idle
     var shutdownFailure: String?
     var lastMaintenanceID: UUID?
+    var surgeTrust = SurgeProcessTrust()
     event("gate_started", "Waiting for fresh verified system guard status")
     event("surge_exit_observation_scope", "One-shot launchd process exits are observed without exit codes/signals. Existing Surge processes without a pending job, NSWorkspace launches and exits after Gate stops are not covered.",
           details: ["launch_method": "launchd_once", "exit_status_available": false])
@@ -364,7 +375,7 @@ func run() throws {
                           details: ["request_id": update.id.uuidString])
                 }
             }
-            var launchState = try pendingLaunchState()
+            var launchState = try pendingLaunchState(trust: &surgeTrust)
             if let settled = launchState, settled.disposition == .settled || settled.disposition == .failed {
                 try settled.request.complete()
                 if settled.disposition == .failed {
@@ -449,14 +460,14 @@ func run() throws {
                 try publish(shutdownFailure == nil ? "shutdown_requested" : "error",
                             shutdownFailure ?? "macOS request submitted, completion is not confirmed. If cancelled, retry ordered shutdown or restart Gate to resume recovery; snapshots remain paused", pending: pending)
             } else if update?.paused == true {
-                try publish("update_paused", update!.reason, pending: pending, surge: surgeIdentity(), update: update)
+                try publish("update_paused", update!.reason, pending: pending, surge: surgeIdentity(trust: &surgeTrust), update: update)
                 if acknowledgedPause != update!.id {
                     event("update_paused", update!.reason)
                     acknowledgedPause = update!.id
                 }
             } else {
                 pending.removeAll { config.excludedApps.contains($0) }
-                var identity = surgeIdentity()
+                var identity = surgeIdentity(trust: &surgeTrust)
                 var waitingForIdentity = false
                 var waitingForNetwork = false
                 let needsSurge = identity.pid == nil || identity.reason == "surge_egress_identity_mismatch"
@@ -465,18 +476,21 @@ func run() throws {
                 }
                 if needsSurge, surgeRetry.canAttempt(at: SystemClock.seconds) {
                     do {
-                        let result = try ensureSurge(quitTimeout: config.quitTimeoutSeconds)
+                        let result = try ensureSurge(quitTimeout: config.quitTimeoutSeconds, trust: &surgeTrust)
                         waitingForIdentity = result == .waitingForBlock
                         waitingForNetwork = result == .waitingForNetwork
                         surgeRetry.succeeded(at: SystemClock.seconds, launched: result == .launched)
                         if result == .launched {
                             event("surge_launch_requested", "Surge identity/startup verified; still waiting for enhanced mode and policy")
                         }
+                        if result == .launched || result == .waitingForBlock {
+                            identity = surgeIdentity(trust: &surgeTrust)
+                        }
                     } catch {
                         surgeRetry.failed(String(describing: error), at: SystemClock.seconds)
                         event("surge_recovery_failed", "\(error). Retrying no earlier than 30 seconds")
+                        identity = surgeIdentity(trust: &surgeTrust)
                     }
-                    identity = surgeIdentity()
                 }
                 // A pause arriving during a bounded operation is acknowledged only after that operation settles.
                 if try SystemUpdate.load() != nil || GateUpdate.load()?.paused == true || GatePendingLaunch.load() != nil { continue }

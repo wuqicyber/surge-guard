@@ -153,7 +153,7 @@ public enum Command {
     }
 }
 
-public struct InterfaceAddress {
+public struct InterfaceAddress: Equatable {
     public let name: String
     public let address: String
     public let up: Bool
@@ -238,8 +238,13 @@ public enum Probe {
     }
 
     public static func trustedSurgePID() throws -> pid_t? {
-        let candidates = try surgeCandidates()
         var trust = SurgeProcessTrust()
+        return try trustedSurgePID(using: &trust)
+    }
+
+    /// Resolves the single code-signed Surge PID while reusing caller-owned `(pid, birthTime)` trust cache.
+    public static func trustedSurgePID(using trust: inout SurgeProcessTrust) throws -> pid_t? {
+        let candidates = try surgeCandidates()
         return try trust.trustedPID(candidates: candidates, validate: surgeSignatureValid, recheck: surgeCandidates)
     }
 
@@ -323,13 +328,20 @@ public enum Probe {
         return startupNetworkReady(primaryInterface: primary?["PrimaryInterface"] as? String, addresses: try addresses())
     }
 
-    public static func surgeInterface() throws -> String {
-        guard let store = SCDynamicStoreCreate(nil, "surge-guard.interface" as CFString, nil, nil),
-              let primary = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
+    public static func surgeInterface(store: SCDynamicStore? = nil, addresses currentAddresses: [InterfaceAddress]? = nil) throws -> String {
+        var trust = SurgeProcessTrust()
+        return try surgeInterface(store: store, addresses: currentAddresses, kernelTrust: &trust)
+    }
+
+    /// Resolves the verified Surge utun interface, reusing caller-owned dynamic store, address inventory and kernel trust.
+    public static func surgeInterface(store: SCDynamicStore? = nil, addresses currentAddresses: [InterfaceAddress]? = nil,
+                                      kernelTrust: inout SurgeProcessTrust) throws -> String {
+        guard let activeStore = store ?? SCDynamicStoreCreate(nil, "surge-guard.interface" as CFString, nil, nil),
+              let primary = SCDynamicStoreCopyValue(activeStore, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
               let interface = primary["PrimaryInterface"] as? String,
               let service = primary["PrimaryService"] as? String,
-              try serviceConnection(service, interface: interface, store: store) != nil,
-              try addresses().contains(where: { $0.name == interface && $0.up && $0.address == "198.18.0.1" }) else {
+              try serviceConnection(service, interface: interface, store: activeStore, kernelTrust: &kernelTrust) != nil,
+              try (currentAddresses ?? addresses()).contains(where: { $0.name == interface && $0.up && $0.address == "198.18.0.1" }) else {
             throw GuardError("Verified Surge interface is unavailable")
         }
         return interface
@@ -343,9 +355,16 @@ public enum Probe {
     }
 
     public static func serviceConnection(_ service: String, interface: String, store: SCDynamicStore) throws -> SurgeServiceConnection? {
+        var trust = SurgeProcessTrust()
+        return try serviceConnection(service, interface: interface, store: store, kernelTrust: &trust)
+    }
+
+    /// Resolves Surge's service or native kernel-tunnel binding while reusing caller-owned extension trust cache.
+    public static func serviceConnection(_ service: String, interface: String, store: SCDynamicStore,
+                                         kernelTrust: inout SurgeProcessTrust) throws -> SurgeServiceConnection? {
         try serviceConnection(service, interface: interface,
                               read: { key in try networkDictionary(key, read: { SCDynamicStoreCopyValue(store, key as CFString) }) },
-                              kernel: kernelTunnelBinding)
+                              kernel: { iface in try kernelTunnelBinding(interface: iface, trust: &kernelTrust) })
     }
 
     // Separate input reads from native attribution so absent, malformed and failed
@@ -368,10 +387,9 @@ public enum Probe {
         return .kernel(binding)
     }
 
-    private static func kernelTunnelBinding(interface: String) throws -> NativeTunnelBinding? {
+    private static func kernelTunnelBinding(interface: String, trust: inout SurgeProcessTrust) throws -> NativeTunnelBinding? {
         let identifier = "com.nssurge.surge-mac.ne"
         let candidates = try processCandidates(name: identifier)
-        var trust = SurgeProcessTrust()
         guard let pid = try trust.trustedPID(candidates: candidates,
                                              validate: { processSignatureValid($0, identifier: identifier) },
                                              recheck: { try processCandidates(name: identifier) }),
@@ -379,6 +397,81 @@ public enum Probe {
               let binding = try NativeTunnelBinding.read(provider: provider, interface: interface),
               try processCandidates(name: identifier) == candidates else { return nil }
         return binding
+    }
+
+    /// Queries the kernel IPv4 routing table via PF_ROUTE RTM_GET without spawning a subprocess.
+    public static func defaultIPv4Interface() throws -> String? {
+        let fd = socket(PF_ROUTE, SOCK_RAW, AF_UNSPEC)
+        guard fd >= 0 else { throw GuardError("Cannot open routing socket: errno \(errno)") }
+        defer { close(fd) }
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw GuardError("Cannot configure routing socket")
+        }
+        let headerSize = MemoryLayout<rt_msghdr>.size
+        let addrSize = MemoryLayout<sockaddr_in>.size
+        let totalSize = headerSize + 2 * addrSize
+        var header = rt_msghdr()
+        header.rtm_msglen = UInt16(totalSize)
+        header.rtm_version = UInt8(RTM_VERSION)
+        header.rtm_type = UInt8(RTM_GET)
+        header.rtm_addrs = RTA_DST | RTA_NETMASK
+        let pid = getpid()
+        let seq: Int32 = 1
+        header.rtm_pid = pid
+        header.rtm_seq = seq
+        var destination = sockaddr_in()
+        destination.sin_len = UInt8(addrSize)
+        destination.sin_family = sa_family_t(AF_INET)
+        var netmask = sockaddr_in()
+        netmask.sin_len = UInt8(addrSize)
+        netmask.sin_family = sa_family_t(AF_INET)
+        var message = [UInt8](repeating: 0, count: totalSize)
+        message.withUnsafeMutableBytes { raw in
+            raw.storeBytes(of: header, as: rt_msghdr.self)
+            raw.storeBytes(of: destination, toByteOffset: headerSize, as: sockaddr_in.self)
+            raw.storeBytes(of: netmask, toByteOffset: headerSize + addrSize, as: sockaddr_in.self)
+        }
+        var sent = -1
+        repeat {
+            sent = message.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, totalSize) }
+        } while sent < 0 && errno == EINTR
+        if sent < 0 {
+            if errno == ESRCH { return nil }
+            throw GuardError("Cannot query IPv4 default route: errno \(errno)")
+        }
+        guard sent == totalSize else { throw GuardError("Incomplete routing socket request") }
+        var buffer = [UInt8](repeating: 0, count: 2048)
+        let deadline = SystemClock.seconds + 0.5
+        while true {
+            let now = SystemClock.seconds
+            guard now < deadline else { throw GuardError("IPv4 default route query timed out") }
+            let remainingMs = Int32(max(1, ceil((deadline - now) * 1000)))
+            var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&pfd, 1, remainingMs)
+            if ready < 0 {
+                if errno == EINTR { continue }
+                throw GuardError("Cannot wait for routing reply: errno \(errno)")
+            }
+            guard ready > 0 else { throw GuardError("IPv4 default route query timed out") }
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            if count < 0 {
+                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+                throw GuardError("Cannot read routing reply: errno \(errno)")
+            }
+            guard count >= headerSize else { continue }
+            let reply = buffer.withUnsafeBytes { $0.load(as: rt_msghdr.self) }
+            guard reply.rtm_version == UInt8(RTM_VERSION), reply.rtm_type == UInt8(RTM_GET),
+                  reply.rtm_pid == pid, reply.rtm_seq == seq else { continue }
+            if reply.rtm_errno == ESRCH { return nil }
+            guard reply.rtm_errno == 0 else {
+                throw GuardError("IPv4 default route lookup failed: errno \(reply.rtm_errno)")
+            }
+            guard Int32(reply.rtm_flags) & RTF_UP != 0, reply.rtm_index > 0 else { return nil }
+            var name = [CChar](repeating: 0, count: Int(IF_NAMESIZE))
+            guard if_indextoname(UInt32(reply.rtm_index), &name) != nil else { return nil }
+            return String(cString: name)
+        }
     }
 
     public static func connectionLossReason(_ status: SCNetworkConnectionStatus) -> String? {
@@ -401,19 +494,31 @@ public enum Probe {
         return dictionary
     }
 
-    public static func readiness(trustedProcess: Bool? = nil) throws -> Readiness {
-        guard let store = SCDynamicStoreCreate(nil, "surge-guard.probe" as CFString, nil, nil) else {
+    public static func readiness(trustedProcess: Bool? = nil, store: SCDynamicStore? = nil,
+                                 addresses currentAddresses: [InterfaceAddress]? = nil,
+                                 defaultRoute: () throws -> String? = defaultIPv4Interface) throws -> Readiness {
+        var trust = SurgeProcessTrust()
+        return try readiness(trustedProcess: trustedProcess, store: store, addresses: currentAddresses,
+                             kernelTrust: &trust, defaultRoute: defaultRoute)
+    }
+
+    /// Evaluates native readiness checks while reusing caller-owned store, address inventory and kernel trust cache.
+    public static func readiness(trustedProcess: Bool? = nil, store: SCDynamicStore? = nil,
+                                 addresses currentAddresses: [InterfaceAddress]? = nil,
+                                 kernelTrust: inout SurgeProcessTrust,
+                                 defaultRoute: () throws -> String? = defaultIPv4Interface) throws -> Readiness {
+        guard let activeStore = store ?? SCDynamicStoreCreate(nil, "surge-guard.probe" as CFString, nil, nil) else {
             throw GuardError("Cannot open SystemConfiguration store")
         }
         func dictionary(_ key: String) throws -> [String: Any]? {
-            try networkDictionary(key, read: { SCDynamicStoreCopyValue(store, key as CFString) })
+            try networkDictionary(key, read: { SCDynamicStoreCopyValue(activeStore, key as CFString) })
         }
         let primary = try dictionary("State:/Network/Global/IPv4") ?? [:]
         let globalIPv6 = try dictionary("State:/Network/Global/IPv6")
         let service = primary["PrimaryService"] as? String ?? ""
         let interface = primary["PrimaryInterface"] as? String ?? ""
         let ipv6Interface = globalIPv6.map { $0["PrimaryInterface"] as? String ?? "" }
-        let serviceConnection = try serviceConnection(service, interface: interface, store: store)
+        let serviceConnection = try serviceConnection(service, interface: interface, store: activeStore, kernelTrust: &kernelTrust)
         let connected: Bool
         switch serviceConnection {
         case .configured:
@@ -422,13 +527,14 @@ public enum Probe {
         case .kernel: connected = true // Verified connected kernel-control socket, not a VPN status integer.
         case nil: connected = false
         }
-        let vifUp = try interface.hasPrefix("utun") && addresses().contains {
+        let interfaceList = try currentAddresses ?? addresses()
+        let vifUp = interface.hasPrefix("utun") && interfaceList.contains {
             $0.name == interface && $0.up && $0.address == "198.18.0.1"
         }
-        let route = try Command.checked("/sbin/route", ["-n", "get", "default"])
+        let routeInterface = try defaultRoute()
         return Readiness(trustedProcess: try trustedProcess ?? trustedSurgeRunning(), surgeService: serviceConnection != nil,
                          connected: connected, vifUp: vifUp,
-                         ownsDefaultRoute: !interface.isEmpty && Policy.defaultInterface(route) == interface,
+                         ownsDefaultRoute: !interface.isEmpty && routeInterface == interface,
                          ipv6Safe: Policy.ipv6Safe(primaryInterface: ipv6Interface, surgeInterface: interface))
     }
 }

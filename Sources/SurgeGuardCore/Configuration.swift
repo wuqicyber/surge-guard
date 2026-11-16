@@ -122,6 +122,47 @@ public struct Configuration: Codable, Equatable {
     }
 }
 
+/// Caches decoded policy configuration by file stat metadata while still verifying root ownership on every read.
+public struct ConfigurationCache {
+    private struct FileStamp: Equatable {
+        let dev: dev_t
+        let ino: ino_t
+        let size: off_t
+        let mtimeSec: Int
+        let mtimeNsec: Int
+    }
+
+    private var stamp: FileStamp?
+    private var cached: Configuration?
+
+    public init() {}
+
+    public mutating func load(path: String = Paths.configuration,
+                              verify: (String) throws -> Void = { try RootFiles.verify($0) },
+                              decode: (String) throws -> Configuration = {
+                                  try Configuration.decode(Data(contentsOf: URL(fileURLWithPath: $0)))
+                              }) throws -> Configuration {
+        do {
+            try verify(path)
+            var info = stat()
+            guard lstat(path, &info) == 0 else {
+                throw GuardError("Cannot stat policy configuration: errno \(errno)")
+            }
+            let current = FileStamp(dev: info.st_dev, ino: info.st_ino, size: info.st_size,
+                                    mtimeSec: info.st_mtimespec.tv_sec, mtimeNsec: info.st_mtimespec.tv_nsec)
+            if current == stamp, let cached { return cached }
+            let loaded = try decode(path)
+            stamp = current
+            cached = loaded
+            return loaded
+        } catch {
+            stamp = nil
+            cached = nil
+            throw error
+        }
+    }
+}
+
 public enum JSON {
     public static func encode<T: Encodable>(_ value: T, pretty: Bool = false) throws -> String {
         let encoder = JSONEncoder()

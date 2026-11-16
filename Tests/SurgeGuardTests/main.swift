@@ -1555,6 +1555,12 @@ do {
     try check(!waitingLog.contains("asuser") && !waitingLog.contains("raw-helper-error") && LogReader.format(waitingLine, json: true).contains("raw-helper-error"), "Nested helper diagnostics polluted the human log or vanished from JSON")
     let failedProbe = String(decoding: try JSONSerialization.data(withJSONObject: ["event": "rule_probe_failed", "message": nestedFailure]), as: UTF8.self)
     try check(LogReader.format(failedProbe).contains("Surge CLI 暂时无法连接") && !LogReader.format(failedProbe).contains("raw-helper-error"), "Root probe failure retained nested command noise")
+    let statusTimeoutSummary = LogReader.reason("rule_probe_failed: /bin/launchctl asuser 501 /Library/PrivilegedHelperTools/surge-guard session-probe 501 failed: 2026-11-15 17:29:19.997 surge-guard[39521:28503808] surge-guard: {\"boot_id\":\"589C8C47\",\"event\":\"command_failed\"}\nsurge-guard: /Applications/Surge.app/Contents/Applications/surge-cli --raw status timed out after 2.0s")
+    try check(statusTimeoutSummary.contains("Surge CLI 查询超时（status 超时）") && !statusTimeoutSummary.contains("boot_id") && !statusTimeoutSummary.contains("asuser"), "Status timeout summary leaked helper JSON or lost subcommand cause")
+    try check(LogReader.reason("rule_probe_failed: /bin/launchctl asuser 501 /Library/PrivilegedHelperTools/surge-guard session-probe 501 timed out after 3.0s").contains("Surge CLI 查询超时（session-probe 超时）"), "Session-probe timeout cause was not distinguished")
+    try check(LogReader.reason("rule_probe_failed: helper failed\nsurge-guard: custom error detail\n").contains("custom error detail"), "Trailing newline caused reason summary to lose error detail")
+    let auditFailureLog = LogReader.format("{\"event\":\"pf_audit_failed\",\"level\":\"warning\",\"message\":\"PF audit failed\"}")
+    try check(auditFailureLog.contains("PF 一致性检查失败"), "PF audit failure event was not translated")
     try check(readable.contains("SurgeGuard") && readable.contains("普通联网已阻断") && readable.contains("最终策略"), "System log lacks component/state/route context")
     print("PASS: both components explain state, cause, impact, progress and recovery; JSON retains raw diagnostics")
     _ = try JSONSerialization.jsonObject(with: Data(LogReader.format("legacy event", json: true).utf8))
@@ -1750,7 +1756,38 @@ do {
     try check(Policy.defaultInterface("   interface: en0\n") == "en0", "Physical interface parsing failed")
     try check(Policy.defaultInterface("route: not in table") == nil, "Missing route accepted")
     try check(Policy.defaultInterface("interface: utun9 extra") == nil, "Malformed route accepted")
-    print("PASS: route parser")
+    let routeCommand = try Command.run("/sbin/route", ["-n", "get", "default"])
+    let nativeRoute = try Probe.defaultIPv4Interface()
+    let expectedRoute = routeCommand.status == 0 ? Policy.defaultInterface(routeCommand.output) : nil
+    try check(nativeRoute == expectedRoute, "Native PF_ROUTE default interface \(nativeRoute ?? "nil") disagreed with /sbin/route \(expectedRoute ?? "nil")")
+    var liveTrust = SurgeProcessTrust()
+    let firstTrusted = try Probe.trustedSurgePID(using: &liveTrust)
+    let secondTrusted = try Probe.trustedSurgePID(using: &liveTrust)
+    try check(firstTrusted == secondTrusted, "Cached Surge trust check diverged across consecutive reads")
+    let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("surge-policy-cache-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cacheDir) }
+    let cachePolicyPath = cacheDir.appendingPathComponent("policy.json").path
+    try Data("{\"version\":1,\"mode\":\"enhanced\",\"route_checks\":[]}\n".utf8).write(to: URL(fileURLWithPath: cachePolicyPath))
+    var configCache = ConfigurationCache()
+    var decodeCount = 0
+    let decodeFile: (String) throws -> Configuration = { path in
+        decodeCount += 1
+        return try Configuration.decode(Data(contentsOf: URL(fileURLWithPath: path)))
+    }
+    let firstConfig = try configCache.load(path: cachePolicyPath, verify: { _ in }, decode: decodeFile)
+    let secondConfig = try configCache.load(path: cachePolicyPath, verify: { _ in }, decode: decodeFile)
+    try check(firstConfig == .enhanced && secondConfig == .enhanced && decodeCount == 1, "Unchanged policy file was re-parsed unnecessarily")
+    let updatedPolicy = "{\"version\":1,\"mode\":\"routes\",\"route_checks\":[{\"url\":\"https://example.com\",\"required_group\":\"Residential\"}]}\n"
+    try Data(updatedPolicy.utf8).write(to: URL(fileURLWithPath: cachePolicyPath))
+    let thirdConfig = try configCache.load(path: cachePolicyPath, verify: { _ in }, decode: decodeFile)
+    try check(thirdConfig.mode == "routes" && decodeCount == 2, "Modified policy file used stale cached configuration")
+    try Data("{\"invalid\":true}\n".utf8).write(to: URL(fileURLWithPath: cachePolicyPath))
+    try rejects { _ = try configCache.load(path: cachePolicyPath, verify: { _ in }, decode: decodeFile) }
+    try Data("{\"version\":1,\"mode\":\"enhanced\",\"route_checks\":[]}\n".utf8).write(to: URL(fileURLWithPath: cachePolicyPath))
+    let recoveredConfig = try configCache.load(path: cachePolicyPath, verify: { _ in }, decode: decodeFile)
+    try check(recoveredConfig == .enhanced, "Failed policy reload poisoned subsequent recovery")
+    print("PASS: route parser, native PF_ROUTE parity, trust caching and configuration cache")
 
     try check(Policy.ipv6Safe(primaryInterface: nil, surgeInterface: "utun9"), "Missing global IPv6 route must be safe")
     try check(Policy.ipv6Safe(primaryInterface: "utun9", surgeInterface: "utun9"), "Surge IPv6 route rejected")

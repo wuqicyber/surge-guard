@@ -1,7 +1,8 @@
 import Foundation
 
 public enum LogReader {
-    private static func reason(_ message: String) -> String {
+    /// Summarizes semicolon-separated guard/route reasons for logs and the menu bar without raw helper noise.
+    public static func reason(_ message: String) -> String {
         let labels = ["route_policy_mismatch": "分流策略与配置不一致", "rule_probe_failed": "无法查询 Surge 分流",
                       "rule_probe_expired": "分流结果已过期，等待重新验证", "rule_probe_pending": "等待第一次分流检查",
                       "configuration_invalid": "联网规则配置无效", "enhanced_mode_disabled": "增强模式已关闭",
@@ -26,9 +27,20 @@ public enum LogReader {
             if key == "rule_probe_failed" {
                 let cause: String
                 if part.contains("Surge isn't running on the local machine") { cause = "Surge CLI 暂时无法连接本机 Surge" }
-                else if part.contains("timed out") { cause = "Surge CLI 查询超时" }
-                else {
-                    let last = part.components(separatedBy: .newlines).last ?? part
+                else if part.contains("timed out") {
+                    if part.contains("surge-cli") && part.contains("--raw status timed out") {
+                        cause = "Surge CLI 查询超时（status 超时）"
+                    } else if part.contains("surge-cli") && part.contains("rule explain") {
+                        cause = "Surge CLI 查询超时（rule explain 超时）"
+                    } else if part.contains("session-probe") {
+                        cause = "Surge CLI 查询超时（session-probe 超时）"
+                    } else {
+                        cause = "Surge CLI 查询超时"
+                    }
+                } else {
+                    let last = part.components(separatedBy: .newlines)
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .last(where: { !$0.isEmpty }) ?? part
                     let brief = last.replacingOccurrences(of: "surge-guard: ", with: "")
                         .components(separatedBy: " UserInfo=")[0]
                     cause = String(text(brief).prefix(240)) + "（完整错误见 --json）"
@@ -71,7 +83,8 @@ public enum LogReader {
                       "local_tcp_inventory_failed": "本地 TCP 例外枚举失败",
                       "local_tcp_inventory_recovered": "本地 TCP 例外枚举已恢复",
                       "configuration_installed": "配置已应用", "rule_probe_failed": "分流查询失败",
-                      "pf_reconciled": "PF 规则已重新校验", "pf_unverified": "无法确认防火墙保护",
+                      "pf_reconciled": "PF 规则已重新校验", "pf_audit_failed": "PF 一致性检查失败，正在重新阻断",
+                      "pf_unverified": "无法确认防火墙保护",
                       "manual_unlock": "已手动解除保护", "restart_requested": "已请求正常重启",
                       "backup_created": "恢复备份已保存", "backup_restored": "已恢复上一次备份",
                       "upgrade_failed": "升级失败", "rollback_completed": "升级失败，上一版已恢复",

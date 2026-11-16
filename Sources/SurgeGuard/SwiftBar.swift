@@ -82,7 +82,9 @@ enum SwiftBar {
         if !modern, status.daemonRunning {
             lines.append("-- 旧版守护正在运行，PF 状态尚未验证 | color=#92400E,#FCD34D size=12")
         } else if !status.reason.isEmpty {
-            let reason = status.reason == "rule_probe_expired" ? "分流验证已过期，保持阻断并自动重试（rule_probe_expired）" : status.reason
+            let reason = status.reason == "rule_probe_expired"
+                ? "分流验证已过期，保持阻断并自动重试（rule_probe_expired）"
+                : LogReader.reason(status.reason)
             lines.append("-- 原因：\(clean(reason)) | color=#B91C1C,#FF6961 size=12")
         }
         let actionHelper = CLI.userDirectory.appendingPathComponent("bin/surge-guard-action").path
