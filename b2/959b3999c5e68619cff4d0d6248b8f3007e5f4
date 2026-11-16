@@ -1,0 +1,30 @@
+Sources/SurgeGate/GateService.swift
+  h_debc74f7d1c6f4 35-39,53,67,142-146,150,162,173,214,361,378,463,470,479,486-488,492
+Sources/SurgeGuard/SwiftBar.swift
+  h_debc74f7d1c6f4 85-87
+Sources/SurgeGuard/main.swift
+  h_debc74f7d1c6f4 25,30,36-39,52-54,113,115-119,123-124,131-136,140,146,154-155,159,167-170,172,197,315-316,327-333,342,350-368,377-378,386,388,394-396,408,428,438,452,462,496-497,649-650,652,654-656
+Sources/SurgeGuardCore/Configuration.swift
+  h_debc74f7d1c6f4 125-165
+Sources/SurgeGuardCore/EgressObservation.swift
+  h_debc74f7d1c6f4 91
+Sources/SurgeGuardCore/Firewall.swift
+  h_debc74f7d1c6f4 241,332,337,387,555
+Sources/SurgeGuardCore/LogReader.swift
+  h_debc74f7d1c6f4 4-5,30-43,86-87
+Sources/SurgeGuardCore/System.swift
+  h_debc74f7d1c6f4 156,242-247,331-340,343-344,358-364,367,390,402-476,497-510,514,521,530-531,534,537
+Tests/SurgeGuardTests/main.swift
+  h_debc74f7d1c6f4 1558-1563,1759-1790
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "b2959b3999c5e68619cff4d0d6248b8f3007e5f4",
+  "prompts": {},
+  "humans": {
+    "h_debc74f7d1c6f4": {
+      "author": "wuqicyber <62527188+wuqicyber@users.noreply.github.com>"
+    }
+  }
+}
